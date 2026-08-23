@@ -5,6 +5,11 @@ rule-bounded dev position, and earns primarily through pump.fun **creator fees**
 
 ---
 
+**Project docs:** [`CLAUDE.md`](CLAUDE.md) — invariants and how to work in this
+repo · [`docs/DECISIONS.md`](docs/DECISIONS.md) — why it is shaped this way, with
+the evidence · [`docs/STATUS.md`](docs/STATUS.md) — what is verified, what is not,
+and the path to live.
+
 ## Read this before funding anything
 
 **Launching is trivial. Distribution is the hard part.** Creator fees are
