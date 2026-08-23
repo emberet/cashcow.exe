@@ -1,0 +1,135 @@
+{
+  // Ships safe. Flip dryRun to false and network to mainnet-beta only after
+  // the verification sequence in the plan has passed end to end.
+  "dryRun": true,
+  "network": "devnet",
+
+  "rpc": {
+    "primary": "https://api.devnet.solana.com",
+    "commitment": "confirmed",
+    "priorityFee": {
+      "mode": "dynamic",
+      "percentile": 75,
+      "minMicroLamports": 50000,
+      "maxMicroLamports": 2000000
+    }
+  },
+
+  "launch": { "provider": "pump-sdk", "pool": "pump" },
+
+  // Conservative defaults. A bad week here costs lunch, not rent.
+  "risk": {
+    "maxLaunchesPerDay": 3,
+    "maxSolPerDay": 0.5,
+    "maxConcurrentPositions": 5,
+    "minWalletBalanceSol": 0.05,
+    "maxDailyLossSol": 0.3,
+    "adaptive": {
+      "enabled": false,
+      "minRunwayDays": 7,
+      "maxDailyBurnPct": 0.2,
+      "reserveSol": 0.05,
+      "maxLaunchesPerDayCeiling": 48,
+      "throttleOnLoss": true,
+      "lossThrottleFactor": 0.5
+    }
+  },
+
+  "devPosition": {
+    "enabled": true,
+    "buySol": 0.05,
+    "buySlippagePct": 15,
+    "exit": {
+      "takeProfitMultiple": 3,
+      "maxHoldMinutes": 30,
+      "stopLossPct": 50,
+      "pollSeconds": 15,
+      "sellSlippagePct": 20
+    }
+  },
+
+  "scoring": {
+    "threshold": 65,
+    "decayHalfLifeMinutes": 45,
+    // Hard gate lowered to 1; independence is now scored, not gated. A lone
+    // /biz/ spike gets in but scores badly on corroboration.
+    "minCorroboratingFeeds": 1,
+    "minIndependentFamilies": 1,
+    // A term seen once has no measurable velocity. These two together are what
+    // stop a cold-started bot launching on its first glimpse of noise.
+    "minObservations": 3,
+    "warmupMinutes": 30,
+    "weights": {
+      "velocity": 0.35,
+      "corroboration": 0.25,
+      "cryptoAffinity": 0.2,
+      "tickerability": 0.1,
+      "reach": 0.1
+    }
+  },
+
+  "saturation": {
+    "lookbackHours": 24,
+    "maxSimilar": 2,
+    "similarityThreshold": 0.72,
+    "neverRelaunchSameTerm": true
+  },
+
+  "feeds": {
+    "googleTrends": { "enabled": true, "weight": 1.0, "pollSeconds": 600, "geo": "US" },
+    "reddit":       { "enabled": true, "weight": 1.0, "pollSeconds": 180 },
+    // Off by default: pay-per-use since Feb 2026, no free tier. Set a card
+    // before enabling, and keep monthlyUsdCap honest.
+    "xApi":         { "enabled": false, "weight": 1.2, "pollSeconds": 300, "monthlyUsdCap": 25 },
+    "fourchan":     { "enabled": true, "weight": 0.6, "pollSeconds": 120, "board": "biz" },
+    "farcaster":    { "enabled": true, "weight": 0.9, "pollSeconds": 240 },
+    "polymarket":   { "enabled": true, "weight": 1.0, "pollSeconds": 300, "minVolume24hUsd": 25000 },
+    "onchain":      { "enabled": true, "weight": 0.5, "pollSeconds": 90, "minMarketCapUsd": 50000, "maxAgeHours": 48 },
+    // Keyless. These exist to widen the independent-source base that
+    // corroboration draws on, not to fire launches on their own.
+    "hackernews":   { "enabled": true, "weight": 0.8, "pollSeconds": 300 },
+    "googleNews":   { "enabled": true, "weight": 0.9, "pollSeconds": 420 },
+    "wikipedia":    { "enabled": true, "weight": 0.7, "pollSeconds": 3600 }
+  },
+
+  "filters": {
+    "blockTrademarks": true,
+    "blockTragedy": true,
+    "blockSlurs": true,
+    "blockLikelyPersonNames": true,
+    // Guards real money only: a live mainnet run refuses to start without the
+    // model screen unless this is deliberately set true.
+    "allowUnscreenedLive": false,
+    "extraBlocklist": [],
+    "allowlist": []
+  },
+
+  "fees": { "enabled": true, "claimIntervalMinutes": 720, "minClaimSol": 0.01 },
+
+  // Wallet-derived launch capacity. Off by default so the static caps above
+  // stay authoritative until you opt in. Run `npm run capacity` to see what it
+  // would resolve to before enabling.
+  // The bot learning from its own results. Off by default, and propose-only
+  // even when on. It can change how PICKY the bot is; it can never change how
+  // much money the bot may lose -- see src/learning/guardrails.ts.
+  "learning": {
+    "enabled": false,
+    "autoApply": false,
+    "settleAfterHours": 6,
+    "minSampleSize": 20,
+    "intervalHours": 24,
+    "maxChangesPerRun": 4,
+    "pinned": []
+  },
+
+  "web": {
+    // Loopback only. See README before changing this.
+    "host": "127.0.0.1",
+    "port": 4600,
+    "publicEnabled": true,
+    "pushIntervalSeconds": 3,
+    "behindTlsProxy": false
+  },
+
+  "logging": { "level": "info", "json": false }
+}

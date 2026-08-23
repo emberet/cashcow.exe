@@ -1,0 +1,38 @@
+{
+  "name": "trendbot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Trend detection -> pump.fun token launcher with hard-capped dev positions and creator-fee harvesting",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/*.test.ts\"",
+    "dev": "node src/cli.ts",
+    "dry-run": "node src/cli.ts run --dry-run",
+    "run": "node src/cli.ts run",
+    "feeds": "node src/cli.ts feeds",
+    "score": "node src/cli.ts score",
+    "fees": "node src/cli.ts fees",
+    "positions": "node src/cli.ts positions",
+    "halt": "node src/cli.ts halt",
+    "resume": "node src/cli.ts resume",
+    "web": "node src/cli.ts web",
+    "admin-password": "node src/cli.ts admin-password"
+  },
+  "dependencies": {
+    "@pump-fun/pump-sdk": "^1.36.0",
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.98.0",
+    "bs58": "^6.0.0",
+    "sharp": "^0.35.3",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.2.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

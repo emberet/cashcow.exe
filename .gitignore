@@ -1,0 +1,16 @@
+node_modules/
+.env
+.env.*
+!.env.example
+data/*.db
+# Machine-learned state: environment-specific, regenerated, and discardable.
+data/tuning.json
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/HALT
+*.log
+config.json
+!src/config/default.config.json
+wallet*.json
+keypair*.json

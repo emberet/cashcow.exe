@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>TrendBot — admin</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎛️</text></svg>">
+</head>
+<body>
+
+<!-- ------------------------------------------------------------- login -->
+<div class="login-shell" id="login-shell" hidden>
+  <form class="login" id="login-form">
+    <div class="mark">T</div>
+    <h2>Admin</h2>
+    <p class="sub">TrendBot control panel</p>
+    <div id="login-msg"></div>
+    <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
+    <button type="submit" class="primary" id="login-btn">Sign in</button>
+  </form>
+</div>
+
+<!-- --------------------------------------------------------- dashboard -->
+<div class="wrap" id="panel-shell" hidden>
+
+  <header class="top">
+    <div class="brand">
+      <div class="mark">T</div>
+      <div>
+        <h1>Admin</h1>
+        <p id="a-mode">—</p>
+      </div>
+    </div>
+    <div class="hdr-actions">
+      <div class="pill" id="a-pill"><span class="dot"></span><span id="a-status">—</span></div>
+      <button class="sm" id="logout">Sign out</button>
+    </div>
+  </header>
+
+  <div id="a-notice"></div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="label">Launches / 24h</div>
+      <div class="value" id="a-launches">—</div>
+      <div class="sub" id="a-launches-cap">—</div>
+      <div class="meter"><div id="a-launch-meter"></div></div>
+    </div>
+    <div class="stat">
+      <div class="label">SOL spent / 24h</div>
+      <div class="value" id="a-spent">—</div>
+      <div class="sub" id="a-spent-cap">—</div>
+      <div class="meter"><div id="a-spend-meter"></div></div>
+    </div>
+    <div class="stat">
+      <div class="label">Realised P&amp;L</div>
+      <div class="value" id="a-pnl">—</div>
+      <div class="sub" id="a-pnl-sub">—</div>
+    </div>
+    <div class="stat">
+      <div class="label">Open positions</div>
+      <div class="value" id="a-open">—</div>
+      <div class="sub" id="a-open-cap">—</div>
+    </div>
+    <div class="stat">
+      <div class="label">Capacity</div>
+      <div class="value" id="a-capacity">—</div>
+      <div class="sub" id="a-capacity-why">—</div>
+    </div>
+    <div class="stat">
+      <div class="label">Hit rate</div>
+      <div class="value" id="a-hitrate">—</div>
+      <div class="sub" id="a-hitrate-sub">—</div>
+    </div>
+  </div>
+
+  <section>
+    <h3 class="section">Controls</h3>
+    <div class="card">
+      <div class="btnrow">
+        <button class="danger" id="btn-halt">Pause launches</button>
+        <button class="primary" id="btn-resume" hidden>Resume</button>
+        <button class="warn" id="btn-sell-all">Sell all positions</button>
+        <button id="btn-claim">Claim creator fees</button>
+        <button id="btn-revoke">Sign out everywhere</button>
+      </div>
+      <p class="hint hint-tight">
+        Pausing stops new launches immediately. Open positions keep following their exit
+        rules — that is deliberate, so hitting the brake never strands a bag.
+        Actions that spend SOL are queued for the bot to run; this web process never
+        holds your wallet key.
+      </p>
+      <div id="cmd-msg" class="mt-sm"></div>
+    </div>
+  </section>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="positions">Positions</button>
+    <button class="tab" data-tab="queue">Candidate queue</button>
+    <button class="tab" data-tab="ledger">Ledger</button>
+    <button class="tab" data-tab="feeds">Feeds</button>
+    <button class="tab" data-tab="commands">Commands</button>
+    <button class="tab" data-tab="learning">Learning</button>
+    <button class="tab" data-tab="audit">Audit</button>
+    <button class="tab" data-tab="config">Config</button>
+  </div>
+
+  <div class="panel active" data-panel="positions">
+    <div class="card">
+      <h4>Open positions</h4>
+      <p class="hint">Force-selling queues a command; the bot executes it within one exit tick.</p>
+      <div class="tablescroll"><table>
+        <thead><tr>
+          <th>#</th><th>Symbol</th><th class="num">Entry SOL</th><th class="num">Age</th>
+          <th>Status</th><th></th>
+        </tr></thead>
+        <tbody id="t-positions"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="panel" data-panel="queue">
+    <div class="card">
+      <h4>Candidate queue</h4>
+      <p class="hint">
+        What the bot is currently considering, ranked. <strong>Admin only</strong> — publishing
+        this in real time would let anyone front-run the launches.
+      </p>
+      <div class="tablescroll"><table>
+        <thead><tr>
+          <th>Term</th><th class="num">Score</th><th class="num">Vel</th><th class="num">Corr</th>
+          <th class="num">Affin</th><th class="num">Seen</th><th>Feeds</th><th></th>
+        </tr></thead>
+        <tbody id="t-queue"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="panel" data-panel="ledger">
+    <div class="card">
+      <h4>Spend ledger</h4>
+      <p class="hint">
+        Append-only. Reconcile this against your actual wallet balance — if they
+        disagree, the budget rail has a hole.
+      </p>
+      <div class="tablescroll"><table>
+        <thead><tr><th>When</th><th>Kind</th><th class="num">Δ SOL</th><th>Note</th></tr></thead>
+        <tbody id="t-ledger"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="panel" data-panel="feeds">
+    <div class="card">
+      <h4>Feed health</h4>
+      <p class="hint">Signals collected per source in the last hour.</p>
+      <div class="tablescroll"><table>
+        <thead><tr><th>Feed</th><th>Enabled</th><th class="num">Weight</th><th class="num">1h</th><th>Last seen</th></tr></thead>
+        <tbody id="t-feeds"></tbody>
+      </table></div>
+      <div id="a-meter-x" class="mt-md"></div>
+    </div>
+  </div>
+
+  <div class="panel" data-panel="commands">
+    <div class="card">
+      <h4>Command queue</h4>
+      <p class="hint">Actions you asked for, and what the bot did with them.</p>
+      <div class="tablescroll"><table>
+        <thead><tr><th>When</th><th>Kind</th><th>Status</th><th>Result</th></tr></thead>
+        <tbody id="t-commands"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="panel" data-panel="learning">
+    <div class="card">
+      <h4>What it launched, and what happened</h4>
+      <p class="hint">
+        Peak market cap and verdict are measured. Per-token fees are
+        <strong>estimated</strong> — pump.fun claims creator fees in bulk across every
+        token this wallet created, so they can only be apportioned by each token's
+        share of observed performance. The exact total is in the ledger.
+      </p>
+      <div class="tablescroll"><table>
+        <thead><tr>
+          <th>Verdict</th><th>Symbol</th><th class="num">Score</th><th class="num">Peak mcap</th>
+          <th class="num">Fee (est)</th><th class="num">P&amp;L</th><th>Feeds</th>
+        </tr></thead>
+        <tbody id="t-outcomes"></tbody>
+      </table></div>
+    </div>
+
+    <div class="card mt-md">
+      <h4>Self-tuning</h4>
+      <p class="hint">
+        The tuner may change how <em>picky</em> the bot is. It can never change how much
+        money the bot may lose — spend caps, position size, exit rules and content filters
+        are outside its mandate and rejected in code, not just discouraged in a prompt.
+      </p>
+      <div id="a-learn-state"></div>
+      <div id="a-overlay"></div>
+      <div class="tablescroll mt-md"><table>
+        <thead><tr><th>When</th><th class="num">Sample</th><th>Changes</th><th>Rationale</th></tr></thead>
+        <tbody id="t-tuning"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="panel" data-panel="audit">
+    <div class="card">
+      <h4>Audit log</h4>
+      <p class="hint">Every admin action, including failed sign-ins.</p>
+      <div class="tablescroll"><table>
+        <thead><tr><th>When</th><th>Action</th><th>Detail</th><th>From</th></tr></thead>
+        <tbody id="t-audit"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="panel" data-panel="config">
+    <div class="card">
+      <h4>Live configuration</h4>
+      <p class="hint">
+        Read-only here on purpose: config is edited in <code>config.json</code> and picked up
+        on restart, so a browser session can never silently widen a spend limit.
+        The RPC endpoint is omitted — API keys are routinely embedded in it.
+      </p>
+      <pre class="mono dim configbox" id="a-config"></pre>
+    </div>
+  </div>
+
+  <footer>
+    <p id="a-foot" class="faint"></p>
+  </footer>
+</div>
+
+<script src="/admin.js"></script>
+</body>
+</html>
