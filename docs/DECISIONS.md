@@ -321,3 +321,39 @@ that candidate and moved to the next.
 **Fix.** Three consecutive failures abandon the tick with an error naming the
 likely causes. A failure that repeats is almost never something the next
 candidate will dodge.
+
+
+---
+
+## 18. Create and sell must use the same program generation
+
+**The bug.** After switching creation to the v1 `createAndBuy` (§16), selling
+still used `sellV2Instructions`. A real devnet sell failed with AnchorError 3012
+`AccountNotInitialized` on `associated_base_bonding_curve` — an account the v2
+sell expects and the v1 create never initialises.
+
+**Nothing caught this earlier.** Unit tests exercise the exit *rules*, not the
+instruction encoding. Simulation caught the create path because that is what was
+simulated; the sell only fails once a position actually exists to sell. It took
+a real launch followed by a real sell.
+
+**Rule.** The create and sell paths are a matched pair. Changing one to a
+different program generation requires changing the other, and the only way to
+know it worked is to launch and then exit on a real cluster.
+
+---
+
+## 19. Book the measured cost, not the estimate
+
+**The drift.** The ledger recorded a flat `estimatedCreateCostSol` for each
+launch. The first real devnet launch recorded −0.075000 against an actual
+−0.075112: the base transaction fee was never booked.
+
+**Fix.** `launchToken` measures the wallet balance either side of the send and
+returns the real delta, which the ledger books in preference to the estimate.
+The next launch reconciled to **zero drift at nine decimal places**.
+
+**Why it matters more than 0.000112 SOL.** The reconciliation check in
+`CLAUDE.md` says that if the ledger and the wallet disagree, the budget rail has
+a hole and everything stops. That check is only usable if the ledger is exact
+when nothing is wrong; a permanent small drift would train you to ignore it.

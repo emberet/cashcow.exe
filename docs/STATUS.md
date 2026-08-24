@@ -22,15 +22,29 @@ Honest state of play. Updated 2026-08-24.
 
 ## Not verified
 
-**A launch has never been *sent*, but it now simulates cleanly.** On 2026-08-24
-the full create + dev-buy transaction was built and simulated against the real
-pump.fun program on **devnet**: `err: NONE`, 173k compute units, with
-`Instruction: Create`, `Instruction: Buy` and `GetFees` all succeeding. That
-closes the biggest gap. What remains untested is an actual signed send, a real
-sell, and a real fee claim — all blocked only on funding a devnet wallet.
+**~~The chain path has never executed.~~ It has now.** On 2026-08-24 two real
+tokens were created on **devnet** with a real dev buy, and one was sold, with a
+funded wallet:
 
-**Nothing has been sent to any chain.** Simulation proves the instructions are
-valid; it does not prove send/confirm/retry, nor that a position can be exited.
+| step | result |
+|---|---|
+| create + dev buy | `F6WLRW36…` sig `2W8Geaji…`, confirmed, no error |
+| mint / supply | exists, 1,000,000,000 supply |
+| dev buy landed | 50,494,116 tokens held |
+| bonding curve | created, creator = our wallet |
+| sell | sig `K3bFJ7EW…`, 0.048740429 SOL returned |
+| position closed | reason `max_hold`, P&L −0.00126 SOL (round-trip fee drag) |
+| ledger reconciliation | measured launch: **zero drift to 9 decimals** |
+| creator fee claim | correctly skipped — vault holds exactly its rent, nothing claimable |
+
+**A successful fee *collection* has never happened.** The claim path reads the
+vault correctly and correctly declines to claim dust, but no claim has returned
+SOL — that needs real trading volume on a launched token, which devnet does not
+naturally provide. Manufacturing that volume by trading against our own token
+would be wash trading in shape, so it was not done even with play money.
+
+**Mainnet is still untested.** Devnet proves the mechanics; it does not prove
+the economics, priority-fee competition, or that anyone will trade the tokens.
 
 **Polymarket is unconfirmed.** The Gamma API was unreachable from the build
 machine while every other host resolved normally — likely an egress restriction

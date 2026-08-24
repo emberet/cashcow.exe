@@ -9,8 +9,15 @@ export function configureLogger(level: Level, json: boolean): void {
   asJson = json;
 }
 
-/** Keys whose values must never reach a log sink. */
-const REDACT = /secret|private|jwt|token|apikey|api_key|password|keypair|mnemonic/i;
+/**
+ * Keys whose values must never reach a log sink.
+ *
+ * `token` is deliberately anchored: a bare /token/ also matched `tokens` and
+ * `tokensReceived`, redacting harmless amounts and making live launch logs
+ * unreadable. Match auth-ish token keys, not every word containing "token".
+ */
+const REDACT =
+  /secret|private|jwt|apikey|api_key|password|keypair|mnemonic|(^|[^a-z])(access|bearer|auth|session|csrf)?_?token([^a-z]|$)/i;
 
 function scrub(value: unknown, depth = 0): unknown {
   if (depth > 4 || value === null || typeof value !== "object") return value;

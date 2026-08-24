@@ -45,6 +45,15 @@ export type LaunchResult = {
   devBuySol: number;
   /** Base units of the token received by the dev buy. */
   tokensReceived: string;
+  /**
+   * Measured wallet delta for the whole launch, when known.
+   *
+   * The ledger otherwise books an *estimate* of the create cost, which
+   * understated real spend by the base transaction fee -- a devnet launch
+   * recorded -0.075000 against an actual -0.075112. Small, but a ledger that
+   * drifts is a ledger you cannot reconcile.
+   */
+  actualCostSol?: number;
   dryRun: boolean;
 };
 
@@ -136,6 +145,7 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
   ];
 
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash(cfg.rpc.commitment);
+  const balanceBefore = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
   const tx = new VersionedTransaction(
     new TransactionMessage({
       payerKey: wallet.publicKey,
@@ -193,8 +203,12 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
     cfg.rpc.commitment,
   );
 
+  const balanceAfter = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
+  const actualCostSol = (balanceBefore - balanceAfter) / 1e9;
+
   log.info("token launched", {
-    mint: mint.toBase58(), symbol: req.symbol, signature, devBuySol: req.devBuySol,
+    mint: mint.toBase58(), symbol: req.symbol, signature,
+    devBuySol: req.devBuySol, actualCostSol,
   });
 
   return {
@@ -202,6 +216,7 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
     signature,
     devBuySol: req.devBuySol,
     tokensReceived: expectedTokens.toString(),
+    actualCostSol,
     dryRun: false,
   };
 }

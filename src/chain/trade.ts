@@ -1,6 +1,7 @@
 import { PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { PumpSdk, OnlinePumpSdk, getSellSolAmountFromTokenAmount } from "@pump-fun/pump-sdk";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import BN from "bn.js";
 import type { Config } from "../config/schema.ts";
 import { getConnection, computeBudgetIxs, lamportsToSol } from "./rpc.ts";
@@ -109,17 +110,24 @@ export async function sellAll(cfg: Config, mint: string, slippagePct: number): P
     };
   }
 
+  // MUST match the create path. The token is created with the v1 `createAndBuy`
+  // (see chain/launch.ts on why v2 cannot fit in a packet), and `sellV2` expects
+  // an `associated_base_bonding_curve` account that the v1 create never
+  // initialises. Mixing them fails on-chain with AnchorError 3012
+  // (AccountNotInitialized) -- caught on a real devnet sell, not in any test.
   const ixs = [
     ...(await computeBudgetIxs(cfg)),
-    ...(await sdk.sellV2Instructions({
+    ...(await sdk.sellInstructions({
       global,
       bondingCurveAccountInfo: sellState.bondingCurveAccountInfo,
       bondingCurve: sellState.bondingCurve,
       mint: mintPk,
       user: wallet.publicKey,
       amount: tokens,
-      quoteAmount: expectedLamports,
+      solAmount: expectedLamports,
       slippage: slippagePct,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      mayhemMode: cfg.launch.mayhemMode,
     })),
   ];
 

@@ -363,12 +363,19 @@ async function launchCandidate(
     Date.now(), result.signature ?? null, isPretend(cfg) ? 1 : 0,
   );
 
+  // Prefer the measured wallet delta over the estimate, so the ledger
+  // reconciles against the chain instead of drifting by the transaction fee.
+  const launchCost = result.actualCostSol !== undefined
+    ? Math.max(0, result.actualCostSol - devBuySol)
+    : cfg.launch.estimatedCreateCostSol;
+
   budget.record({
     kind: "launch",
-    solDelta: -(cfg.launch.estimatedCreateCostSol),
+    solDelta: -launchCost,
     mint: result.mint,
     signature: result.signature,
-    note: `${identity.symbol} <- "${candidate.term}"`,
+    note: `${identity.symbol} <- "${candidate.term}"` +
+      (result.actualCostSol !== undefined ? " (measured)" : " (estimated)"),
   });
 
   if (devBuySol > 0) {
