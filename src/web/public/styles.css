@@ -594,10 +594,22 @@ a.gate:hover .gate-more, a.gate:focus-visible .gate-more { opacity: .75; }
 
 /* ------------------------------------------------------------ gate detail */
 
-.gd { border-width: 4px; box-shadow: var(--shadow-lg); margin-bottom: 22px; }
-/* The topbar is sticky, so anchor/scrollIntoView landings must clear it or the
-   panel's own heading ends up hidden underneath. */
-#gate-detail { scroll-margin-top: 90px; }
+/* The panel is a grid item spanning every column, so it slots in directly
+   beneath the row of the gate that was clicked. That adjacency is what removes
+   the need to scroll the reader's page for them. */
+#gate-detail { grid-column: 1 / -1; }
+.gd { border-width: 4px; box-shadow: var(--shadow-lg); }
+
+/* The gate whose panel is open, so the second click has something to undo. */
+a.gate.open {
+  background: var(--sun);
+  transform: translate(-2px, -2px);
+  box-shadow: 9px 9px 0 var(--ink);
+}
+a.gate.open.jam { background: var(--pink); }
+a.gate.open.win { background: var(--grass); }
+a.gate.open .gate-more { opacity: 1; }
+a.gate.open .gate-more::after { content: " (click to close)"; }
 .gd .gate-idx { width: 36px; height: 36px; font-size: 17px; }
 
 .gd-stats {

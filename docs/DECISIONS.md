@@ -409,10 +409,29 @@ lives:
 **An empty delayed list is a normal state, not a fault**, and says so: "nothing
 has aged past the 6-hour delay yet". A blank panel would read as broken.
 
-**A small implementation trap.** The topbar is sticky, so anchor landings put the
-panel's own heading underneath it. Fixed with `scroll-margin-top` plus
-`block: "start"`; `block: "nearest"` looked correct in the DOM and wrong on
-screen.
+**The panel opens where you clicked, and never moves the page.** The first
+version scrolled the panel into view, which yanked the page out from under the
+reader on every click, and a second click on the same gate did nothing — an
+anchor to the hash you are already on fires no `hashchange`, so the panel just
+sat there looking dead.
+
+Both were fixed by the same idea: put the panel *inside* the gates grid as a
+full-width item and compute its `order` so it lands directly beneath the row
+holding the clicked gate. Adjacent content needs no scrolling. On top of that:
+
+- clicking the open gate closes it (the click handler intercepts the
+  already-current hash and clears it),
+- the open gate is highlighted and its hint changes to "click to close", so the
+  second click is discoverable,
+- Escape and a CLOSE button also close it,
+- the column count is read from the computed grid and recomputed on resize, so
+  the row maths holds at every breakpoint,
+- the panel is a persistent node whose contents are only rebuilt when the data
+  actually changes, so a background push every few seconds cannot tear it down
+  mid-read.
+
+Closing uses `replaceState`, not `pushState`: Back should leave the page, not
+reopen what was just dismissed.
 
 
 ---

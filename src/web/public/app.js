@@ -111,7 +111,7 @@ function render(d) {
   // back button works without any routing code.
   $("gates").innerHTML = f.gates.map((g) => `
     <a class="gate${g.jam ? " jam" : ""}${g.win ? " win" : ""}" href="#gate-${g.idx}"
-       aria-label="${esc(g.label)} — open detail">
+       data-gate="${g.idx}" aria-label="${esc(g.label)} — open detail">
       <div class="gate-top">
         <span class="gate-idx">${g.idx}</span>
         <span class="gate-tag">${g.jam ? "THE JAM" : g.win ? "YUM" : ""}</span>
@@ -122,6 +122,11 @@ function render(d) {
       <div class="gate-drop">${esc(g.drop)}</div>
       <span class="gate-more">what happened here →</span>
     </a>`).join("");
+
+  // The detail panel is a persistent node parked inside the grid, so a push
+  // every few seconds never tears it down under the reader's cursor.
+  $("gates").appendChild(detailNode());
+  wireGateToggles();
 
   gateData = d.gateDetails || [];
   renderGateDetail();
@@ -353,11 +358,69 @@ function applyDynamicStyles() {
 // ------------------------------------------------------------ gate detail
 
 let gateData = [];
+let panelEl = null;
+let lastPanelKey = null;
 
 /** Which gate the URL is pointing at, or null. */
 function currentGate() {
   const m = /^#gate-(\d+)$/.exec(location.hash);
   return m ? Number(m[1]) : null;
+}
+
+/** One long-lived panel element, reused across renders. */
+function detailNode() {
+  if (!panelEl) {
+    panelEl = document.createElement("div");
+    panelEl.id = "gate-detail";
+    panelEl.hidden = true;
+  }
+  return panelEl;
+}
+
+function closeDetail() {
+  // Drop the hash without adding a history entry, so Back still leaves the page
+  // rather than reopening what was just closed.
+  history.replaceState("", document.title, location.pathname + location.search);
+  renderGateDetail();
+}
+
+/**
+ * Clicking the gate that is already open should close it.
+ *
+ * An anchor to the hash you are already on fires no `hashchange`, so without
+ * this the panel simply stays open and the card feels dead on the second click.
+ */
+function wireGateToggles() {
+  $("gates").querySelectorAll("[data-gate]").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      if (Number(a.dataset.gate) === currentGate()) {
+        e.preventDefault();
+        closeDetail();
+      }
+    });
+  });
+}
+
+/** How many columns the grid is showing right now, across breakpoints. */
+function gridColumnCount() {
+  const cs = getComputedStyle($("gates"));
+  return Math.max(1, cs.gridTemplateColumns.split(" ").filter(Boolean).length);
+}
+
+/**
+ * Slot the panel directly beneath the row holding the clicked gate.
+ *
+ * This is what removes the need to scroll: the detail opens next to what was
+ * clicked instead of at the bottom of the section. Order is recomputed on
+ * resize because the column count changes at every breakpoint.
+ */
+function positionPanel(idx) {
+  const cols = gridColumnCount();
+  const row = Math.ceil(idx / cols);
+  $("gates").querySelectorAll("[data-gate]").forEach((a) => {
+    a.style.order = String(Number(a.dataset.gate) * 10);
+  });
+  detailNode().style.order = String(row * cols * 10 + 5);
 }
 
 function renderGateDetail() {
@@ -367,8 +430,24 @@ function renderGateDetail() {
   const idx = currentGate();
   const g = gateData.find((x) => x.idx === idx);
 
-  if (!g) { panel.hidden = true; panel.innerHTML = ""; return; }
+  panel.querySelectorAll && $("gates")?.querySelectorAll("[data-gate]").forEach((a) =>
+    a.classList.toggle("open", Number(a.dataset.gate) === idx));
+
+  if (!g) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    lastPanelKey = null;
+    return;
+  }
+
+  // Skip the rebuild when nothing changed, so a background push does not
+  // replace the panel the reader is currently looking at.
+  const key = `${idx}:${JSON.stringify(g)}`;
+  if (key === lastPanelKey && !panel.hidden) { positionPanel(idx); return; }
+  lastPanelKey = key;
+
   panel.hidden = false;
+  positionPanel(idx);
 
   const stats = (g.stats || []).map((s) => `
     <div class="gd-stat">
@@ -451,18 +530,19 @@ function renderGateDetail() {
 
   panel.querySelector("#gd-close")?.addEventListener("click", (e) => {
     e.preventDefault();
-    // Push a hash-free URL so Back returns to wherever they came from.
-    history.pushState("", document.title, location.pathname + location.search);
-    renderGateDetail();
+    closeDetail();
   });
 
   applyDynamicStyles();
-  // `start` plus scroll-margin-top clears the sticky header; `nearest` did not.
-  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  // Deliberately no scrollIntoView. The panel opens beneath the row that was
+  // clicked, so moving the page under the reader would be an unrequested jump.
 }
 
 let delayHours = 6;
 window.addEventListener("hashchange", renderGateDetail);
+window.addEventListener("keydown", (e) => { if (e.key === "Escape" && currentGate()) closeDetail(); });
+// Column count changes at breakpoints, which moves which row a gate sits in.
+window.addEventListener("resize", () => { const i = currentGate(); if (i) positionPanel(i); });
 
 // --------------------------------------------------------------- countdown
 
