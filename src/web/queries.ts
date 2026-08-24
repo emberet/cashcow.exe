@@ -1,5 +1,5 @@
 import type { Db } from "../util/db.ts";
-import type { Config } from "../config/schema.ts";
+import { isPretend, type Config } from "../config/schema.ts";
 import { BudgetGuard } from "../risk/budget.ts";
 import { KillSwitch } from "../risk/killswitch.ts";
 import { buildCandidates, checkWarmup, historySpanMinutes } from "../scoring/score.ts";
@@ -27,7 +27,7 @@ export type PublicSnapshot = ReturnType<typeof publicSnapshot>;
 export type AdminSnapshot = ReturnType<typeof adminSnapshot>;
 
 function mode(cfg: Config): 0 | 1 {
-  return cfg.dryRun ? 1 : 0;
+  return isPretend(cfg) ? 1 : 0;
 }
 
 export function statusOf(db: Db, cfg: Config, kill: KillSwitch): {

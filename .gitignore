@@ -10,7 +10,11 @@ data/*.db-wal
 data/*.db-shm
 data/HALT
 *.log
+scratch/
+devnet.json
 config.json
 !src/config/default.config.json
 wallet*.json
 keypair*.json
+*keypair*.json
+data/*keypair*.json

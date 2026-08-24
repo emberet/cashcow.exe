@@ -1,0 +1,37 @@
+{
+  "dryRun": false,
+  "network": "devnet",
+  "rpc": {
+    "primary": "https://api.devnet.solana.com",
+    "commitment": "confirmed"
+  },
+  "wallet": {
+    "keypairPath": "data/devnet-keypair.json"
+  },
+  "launch": {
+    "simulate": true
+  },
+  "devPosition": {
+    "enabled": true,
+    "buySol": 0.05
+  },
+  "risk": {
+    "maxLaunchesPerDay": 1,
+    "maxSolPerDay": 0.5,
+    "minWalletBalanceSol": 0.001
+  },
+  "scoring": {
+    "minCorroboratingFeeds": 1,
+    "minObservations": 1,
+    "warmupMinutes": 0,
+    "threshold": 40
+  },
+  "logging": {
+    "level": "info",
+    "json": false
+  },
+  "storage": {
+    "dbPath": "data/devnet.db",
+    "haltFile": "data/devnet-HALT"
+  }
+}

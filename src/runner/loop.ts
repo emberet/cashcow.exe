@@ -1,5 +1,5 @@
 import type { Db } from "../util/db.ts";
-import type { Config } from "../config/schema.ts";
+import { isPretend, type Config } from "../config/schema.ts";
 import { BudgetGuard, BudgetDenied } from "../risk/budget.ts";
 import type { KillSwitch } from "../risk/killswitch.ts";
 import { pollAll, enabledFeeds } from "../feeds/registry.ts";
@@ -45,6 +45,16 @@ const LAST_FEE_CLAIM = "lastFeeClaimMs";
 const LAST_TUNING = "lastTuningMs";
 const LAST_OUTCOME_REFRESH = "lastOutcomeRefreshMs";
 
+/**
+ * Stop trying after this many launches fail back to back in one tick.
+ *
+ * A failure that repeats is almost always systemic -- an unfunded wallet, a
+ * dead RPC, a program change -- not something the next candidate will dodge.
+ * An unfunded devnet wallet produced 249 consecutive failed attempts before
+ * this existed, each one a full model call, image render and RPC round trip.
+ */
+const MAX_CONSECUTIVE_FAILURES = 3;
+
 export type TickStats = {
   candidates: number;
   qualified: number;
@@ -66,7 +76,7 @@ function recordDecline(
   db.prepare(
     `INSERT INTO declined (ts, term, norm, reason, detail, score, dry_run)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(Date.now(), a.term, a.norm, a.reason, a.detail.slice(0, 200), a.score, cfg.dryRun ? 1 : 0);
+  ).run(Date.now(), a.term, a.norm, a.reason, a.detail.slice(0, 200), a.score, isPretend(cfg) ? 1 : 0);
 }
 
 function recordFunnel(db: Db, cfg: Config, f: Funnel): void {
@@ -76,7 +86,7 @@ function recordFunnel(db: Db, cfg: Config, f: Funnel): void {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     Date.now(), f.sniffed, f.phrases, f.terms, f.warm, f.scored, f.examined,
-    f.clean, f.uncrowded, f.affordable, f.launched, cfg.dryRun ? 1 : 0,
+    f.clean, f.uncrowded, f.affordable, f.launched, isPretend(cfg) ? 1 : 0,
   );
 }
 
@@ -211,6 +221,7 @@ export async function launchTick(
   }
 
   const filters = compileFilters(cfg.filters);
+  let consecutiveFailures = 0;
 
   for (const candidate of passing) {
     if (!kill.allowsNewLaunches()) break;
@@ -248,7 +259,8 @@ export async function launchTick(
     const estimate = estimateLaunchCostSol(cfg, devBuySol);
 
     let walletBalanceSol: number | undefined;
-    if (!cfg.dryRun) {
+    // Only a real send can breach the wallet floor; a simulation moves nothing.
+    if (!isPretend(cfg)) {
       walletBalanceSol = await getBalanceSol(cfg, loadWallet(cfg).publicKey);
     }
 
@@ -273,6 +285,7 @@ export async function launchTick(
       await launchCandidate(db, cfg, budget, candidate, filters, estimate);
       stats.launched++;
       funnel.launched++;
+      consecutiveFailures = 0;
     } catch (e) {
       if (e instanceof RiskyTrendError) {
         log.info("candidate rejected by risk screen", { term: candidate.term, reason: e.message });
@@ -290,6 +303,17 @@ export async function launchTick(
       }
       log.error("launch failed", { term: candidate.term, ...errFields(e) });
       reject("error");
+
+      if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        log.error(
+          "too many consecutive launch failures; abandoning this tick. " +
+          "Repeated failures are systemic, not candidate-specific -- check the " +
+          "wallet balance, the RPC, and whether the pump.fun program changed.",
+          { failures: consecutiveFailures, lastTerm: candidate.term },
+        );
+        reject("aborted:consecutive_failures");
+        break;
+      }
     }
   }
 
@@ -336,7 +360,7 @@ async function launchCandidate(
   ).run(
     result.mint, candidate.term, candidate.key, identity.name, identity.symbol,
     pinned.uri, candidate.score, JSON.stringify(candidate.feeds),
-    Date.now(), result.signature ?? null, cfg.dryRun ? 1 : 0,
+    Date.now(), result.signature ?? null, isPretend(cfg) ? 1 : 0,
   );
 
   budget.record({
@@ -355,7 +379,7 @@ async function launchCandidate(
       entrySol: devBuySol,
       entryTokens: result.tokensReceived,
       signature: result.signature,
-      dryRun: cfg.dryRun,
+      dryRun: isPretend(cfg),
     });
   }
 
@@ -369,7 +393,7 @@ async function launchCandidate(
     families: candidate.families,
     namingSource: identity.source,
     entrySol: devBuySol,
-    dryRun: cfg.dryRun,
+    dryRun: isPretend(cfg),
   });
 
   log.info("LAUNCHED", {
@@ -426,7 +450,7 @@ async function maybeClaimFees(db: Db, cfg: Config, budget: BudgetGuard): Promise
     if (result.claimedSol > 0 && !result.skipped) {
       db.prepare(
         `INSERT INTO fee_claims (ts, sol_amount, signature, dry_run) VALUES (?, ?, ?, ?)`,
-      ).run(Date.now(), result.claimedSol, result.signature ?? null, cfg.dryRun ? 1 : 0);
+      ).run(Date.now(), result.claimedSol, result.signature ?? null, isPretend(cfg) ? 1 : 0);
 
       budget.record({
         kind: "fee_claim",

@@ -4,6 +4,14 @@ import {
 import {
   PumpSdk, OnlinePumpSdk, newBondingCurve, getBuyTokenAmountFromSolAmount,
 } from "@pump-fun/pump-sdk";
+
+/**
+ * Solana's hard packet limit. A transaction that exceeds this cannot be sent at
+ * any price, and web3.js reports it as an opaque "encoding overruns
+ * Uint8Array" from deep inside buffer-layout -- so we check it ourselves and
+ * say something useful instead.
+ */
+const MAX_TX_BYTES = 1232;
 import BN from "bn.js";
 import type { Config } from "../config/schema.ts";
 import { getConnection, computeBudgetIxs, solToLamports, maxPriorityFeeCostSol } from "./rpc.ts";
@@ -79,15 +87,14 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
   // there is no on-chain bonding curve to read.
   const global = await online.fetchGlobal();
   const feeConfig = await online.fetchFeeConfig().catch(() => null);
-  if (!global.createV2Enabled) {
+  if (cfg.launch.cashback) {
+    // Cashback is a v2-create feature, and the v2 create+buy bundle does not
+    // fit in a packet (see the note on the instruction choice below).
     throw new Error(
-      "pump.fun global config reports createV2Enabled=false; the v2 create path is " +
-      "disabled on-chain right now. Refusing to launch rather than burning fees on a " +
-      "transaction that will fail.",
+      "launch.cashback requires the v2 create path, which cannot fit in a single " +
+      "transaction alongside the dev buy. Disable cashback, or implement an " +
+      "address lookup table first.",
     );
-  }
-  if (cfg.launch.cashback && !global.isCashbackEnabled) {
-    throw new Error("launch.cashback is set but cashback coins are disabled on-chain");
   }
 
   const quoteLamports = new BN(solToLamports(req.devBuySol));
@@ -103,9 +110,19 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
       })
     : new BN(0);
 
+  // Instruction choice is forced by the packet limit, not by preference.
+  // Measured on devnet against the real program, worst case (32-char name,
+  // 8-char symbol, Pinata CIDv1 URI), including compute-budget instructions:
+  //
+  //   createV2AndBuyV2   33 accounts  -> does not serialise at all
+  //   createV2AndBuy     25 accounts  -> 1283 bytes, over the 1232 limit
+  //   createAndBuy (v1)  23 accounts  -> 1215 bytes, fits with ~17 to spare
+  //
+  // So v1 it is. The proper fix for the v2 path is an address lookup table,
+  // which would compress those account references from 32 bytes to 1.
   const ixs = [
     ...(await computeBudgetIxs(cfg)),
-    ...(await sdk.createV2AndBuyV2Instructions({
+    ...(await sdk.createAndBuyInstructions({
       global,
       mint,
       name: req.name,
@@ -114,10 +131,7 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
       creator: wallet.publicKey,
       user: wallet.publicKey,
       amount: expectedTokens,
-      quoteAmount: quoteLamports,
-      mayhemMode: cfg.launch.mayhemMode,
-      // Permanent per-token decision; false keeps fees with the creator.
-      cashback: cfg.launch.cashback,
+      solAmount: quoteLamports,
     })),
   ];
 
@@ -132,6 +146,43 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
 
   // Both signatures are required: the mint account is being created.
   tx.sign([wallet, mintKp]);
+
+  // Fail loudly and early rather than with a buffer-layout stack trace.
+  const txBytes = tx.serialize().length;
+  if (txBytes > MAX_TX_BYTES) {
+    throw new Error(
+      `transaction is ${txBytes} bytes, over Solana's ${MAX_TX_BYTES} limit. ` +
+      `Shorten the metadata URI or the token name, or add an address lookup table.`,
+    );
+  }
+  log.debug("launch transaction built", { bytes: txBytes, headroom: MAX_TX_BYTES - txBytes });
+
+  if (cfg.launch.simulate) {
+    const sim = await conn.simulateTransaction(tx, {
+      sigVerify: false,
+      replaceRecentBlockhash: true,
+      commitment: cfg.rpc.commitment,
+    });
+    const err = sim.value.err;
+    log.info("SIMULATED launch (nothing sent, no lamports moved)", {
+      mint: mint.toBase58(), symbol: req.symbol,
+      unitsConsumed: sim.value.unitsConsumed,
+      err: err ? JSON.stringify(err) : null,
+      logs: (sim.value.logs ?? []).slice(-12),
+    });
+    if (err) {
+      throw new Error(
+        `simulation failed: ${JSON.stringify(err)} :: ` +
+        (sim.value.logs ?? []).slice(-4).join(" | "),
+      );
+    }
+    return {
+      mint: mint.toBase58(),
+      devBuySol: req.devBuySol,
+      tokensReceived: expectedTokens.toString(),
+      dryRun: true,
+    };
+  }
 
   const signature = await conn.sendTransaction(tx, {
     skipPreflight: false,

@@ -87,6 +87,22 @@ export async function pinTokenMetadata(
     };
   }
 
+  // Off-mainnet testing without a Pinata account: the program only stores the
+  // URI string, so a placeholder exercises the whole chain path. Refused on
+  // mainnet, where a coin with unresolvable metadata is worthless.
+  if (!process.env[cfg.assets.ipfs.jwtEnv] && cfg.network !== "mainnet-beta") {
+    const stub = `${cfg.network}-${identity.symbol.toLowerCase()}`;
+    log.warn("no PINATA_JWT: using a placeholder metadata URI", {
+      network: cfg.network,
+      note: "fine for a chain-path test, never for mainnet",
+    });
+    return {
+      uri: `https://example.invalid/${stub}.json`,
+      imageUri: `https://example.invalid/${stub}.png`,
+      metadataCid: stub, imageCid: stub,
+    };
+  }
+
   const jwt = requireJwt(cfg);
   const gateway = cfg.assets.ipfs.gatewayUrl.replace(/\/+$/, "") + "/";
 

@@ -194,9 +194,10 @@ refuses rather than draining itself. That refusal is the feature.
 when `dryRun` is set; IPFS pinning is skipped; a missing wallet generates an
 ephemeral throwaway keypair.
 
-**Reasoning.** pump.fun is not deployed on devnet, so a dry run *cannot* read
-real bonding-curve state. Pretending otherwise would make the dry run look like
-it validated the chain path when it did not. What a dry run proves is the signal
+**Reasoning.** A dry run should prove the signal pipeline without needing any
+credentials. (The original reasoning here also claimed pump.fun was not deployed
+on devnet — see §15. That was wrong, but the short-circuit is still right: a
+dry run should not require a wallet or an RPC at all.) What a dry run proves is the signal
 pipeline — feeds, scoring, filters, saturation, naming, metadata. The chain path
 is proven separately against a local validator running the cloned program.
 
@@ -250,3 +251,73 @@ at — the allowance ran out first".
 
 **The general rule.** A funnel that attributes unexamined items to a rejection
 reason is not a funnel, it is marketing.
+
+
+---
+
+## 15. Correction: pump.fun runs on devnet, and testnet is a trap
+
+**What was believed.** From planning onward this project asserted that pump.fun
+is not deployed on devnet, so real launches could only be exercised against a
+local validator running a cloned program. That claim reached the README,
+CLAUDE.md, STATUS.md and the verification plan.
+
+**It was wrong.** Verified 2026-08-24 by querying each cluster directly:
+
+| cluster | program | global config | SDK `fetchGlobal` |
+|---|---|---|---|
+| devnet | present, executable | 1396 b64 chars | **OK** — `initialized`, `createV2Enabled`, 95bps/5bps |
+| testnet | present, executable | 684 b64 chars | **fails** — layout offset out of range |
+| mainnet | present, executable | 1396 b64 chars | OK |
+
+**devnet is fully functional. testnet carries a stale deployment the current SDK
+cannot decode.** So the local-validator step was never necessary, and "test on
+testnet" is actively the wrong instruction.
+
+**Why it matters beyond the fact itself.** The belief was sourced from
+third-party writing rather than from the chain, and it then shaped a whole
+verification plan. A claim that determines what you build should be checked
+against the system itself, not against an article about the system. Querying
+three RPCs took under a minute; the assumption stood unexamined for the entire
+build.
+
+---
+
+## 16. The launch transaction barely fits in a packet
+
+**The bug.** `createV2AndBuyV2Instructions` — chosen because it was the newest
+API with the most features — produces **33 unique accounts**, and the resulting
+message cannot be serialised at all. web3.js reports this as `encoding overruns
+Uint8Array` from inside buffer-layout, which names neither the cause nor the
+limit. Every launch would have failed.
+
+**Measured on devnet**, worst case (32-char name, 8-char symbol, Pinata CIDv1
+URI), including compute-budget instructions, against a 1232-byte limit:
+
+| variant | accounts | bytes | fits |
+|---|---|---|---|
+| `createV2AndBuyV2` | 33 | does not serialise | no |
+| `createV2AndBuy` | 25 | 1283 | no |
+| `createAndBuy` (v1) | 23 | **1215** | yes, by 17 bytes |
+
+**Decision.** Use the v1 `createAndBuy`. This costs the v2-only `cashback` flag,
+which is now rejected at startup with an explanation rather than silently
+producing an unsendable transaction. A size check runs before every send so the
+failure mode is a sentence, not a buffer-layout stack trace.
+
+**The 17 bytes are a standing hazard.** Any extra account, or a longer metadata
+URI, breaks launches. The real fix is an address lookup table, which would
+compress those 23 account references from 32 bytes to 1.
+
+---
+
+## 17. Repeated failures are systemic; stop trying
+
+**The bug.** With an unfunded wallet, one tick produced **249 consecutive failed
+launch attempts** — each one a model call, an image render, an IPFS step and
+several RPC round trips — because the loop treated every failure as specific to
+that candidate and moved to the next.
+
+**Fix.** Three consecutive failures abandon the tick with an error naming the
+likely causes. A failure that repeats is almost never something the next
+candidate will dodge.

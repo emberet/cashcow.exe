@@ -108,11 +108,24 @@ budget → *then* the model call, image render, and IPFS pin.
   spread.
 - **Migrations are append-only** in `src/util/db.ts`. Never edit an existing one;
   add the next. Currently at v5.
+- **`launch.simulate` builds the real transaction and simulates it.** Stronger
+  evidence than `dryRun`, which never touches the chain. Both book against the
+  pretend ledger via `isPretend()` — a simulation must never consume the real
+  daily allowance.
 - **pump.fun's frontend endpoints are not a documented API.** `frontend-api-v3`
   works and `frontend-api` returns 530. They can change without notice —
   DexScreener is wired as a structurally different fallback.
-- **pump.fun is not on devnet.** Devnet validates wallet/signing/persistence only.
-  Real launches need a local validator with the cloned program.
+- **pump.fun IS on devnet, and it works.** An earlier version of this file said
+  otherwise; that was wrong and cost a lot of assumed effort. Verified 2026-08-24:
+  the program, its global config and the fee program are all live on devnet, and
+  a full create+buy simulates cleanly. **testnet** carries a stale deployment the
+  SDK cannot even decode — use devnet, never testnet. No local validator needed.
+- **The launch transaction is within ~17 bytes of the packet limit.** Measured
+  worst case (32-char name, 8-char symbol, Pinata CIDv1 URI) is 1215 of 1232
+  bytes. `createV2AndBuyV2` (33 accounts) does not fit at all and
+  `createV2AndBuy` (25) overflows with a real URI, so the v1 `createAndBuy`
+  (23 accounts) is the only workable path until an address lookup table exists.
+  Anything that adds an account or lengthens the URI will break launches.
 - **Some hosts are blocked from some networks.** Polymarket's Gamma API was
   unreachable from the build machine while every other host resolved. If a feed
   returns nothing, check reachability before assuming a parsing bug.

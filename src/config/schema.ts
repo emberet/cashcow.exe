@@ -320,6 +320,17 @@ export const configSchema = z.object({
     mayhemMode: z.boolean().default(false),
     /** Upper bound on rent + protocol fee for a create, used for budgeting. */
     estimatedCreateCostSol: z.number().positive().default(0.025),
+    /**
+     * Build the real transaction against the real program and SIMULATE it,
+     * instead of sending.
+     *
+     * Stronger evidence than `dryRun`: dry run never touches the chain at all,
+     * so it cannot tell you whether the instruction set is well formed. This
+     * validates account resolution, the bonding-curve maths and the program's
+     * own checks -- everything except actually spending. Nothing is signed to
+     * the network and no lamports move.
+     */
+    simulate: z.boolean().default(false),
   }).default({}),
   risk: riskSchema.default({}),
   devPosition: devPositionSchema.default({}),
@@ -390,6 +401,18 @@ export const configSchema = z.object({
 });
 
 export type Config = z.infer<typeof configSchema>;
+
+/**
+ * Did this run actually move money?
+ *
+ * `dryRun` never touches the chain; `launch.simulate` builds and simulates a
+ * real transaction but sends nothing. Both spend zero, so both must be booked
+ * against the simulated ledger -- otherwise a simulation would consume the real
+ * daily allowance and show up as live spend that never happened.
+ */
+export function isPretend(cfg: Config): boolean {
+  return cfg.dryRun || cfg.launch.simulate;
+}
 export type FeedsConfig = z.infer<typeof feedsSchema>;
 export type RiskConfig = z.infer<typeof riskSchema>;
 export type DevPositionConfig = z.infer<typeof devPositionSchema>;

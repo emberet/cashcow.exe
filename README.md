@@ -261,7 +261,13 @@ feature into the thing that loses the money.
 - **pump.fun's frontend endpoints are not a documented public API.** Saturation
   and on-chain momentum use them and can break without notice; DexScreener is
   wired in as a structurally different fallback.
-- **Devnet cannot test a launch.** pump.fun is not deployed there. See below.
+- **Use devnet, never testnet.** pump.fun runs on devnet and a full create+buy
+  simulates cleanly there. testnet carries a stale deployment the SDK cannot
+  decode. An earlier version of this README claimed devnet was unusable — that
+  was wrong, see `docs/DECISIONS.md` §15.
+- **The launch transaction has ~17 bytes of headroom** against Solana's
+  1232-byte packet limit. Adding an account or lengthening the metadata URI will
+  break launches until an address lookup table exists (§16).
 - **Corroboration is now scored, not gated.** The hard bar is one source; a lone
   /biz/ spike is admitted but scores 0 on corroboration and must be excellent
   elsewhere to qualify. Two feeds in the same family (/biz/ + on-chain) count as

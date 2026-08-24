@@ -22,11 +22,15 @@ Honest state of play. Updated 2026-08-24.
 
 ## Not verified
 
-**The chain path has never executed.** Launch, sell, and creator-fee claim are
-written against the official `@pump-fun/pump-sdk` with signatures read from its
-type declarations, and both program IDs are confirmed correct against the SDK's
-own exported constants. But **no transaction has ever run.** This is the single
-biggest gap and the next milestone.
+**A launch has never been *sent*, but it now simulates cleanly.** On 2026-08-24
+the full create + dev-buy transaction was built and simulated against the real
+pump.fun program on **devnet**: `err: NONE`, 173k compute units, with
+`Instruction: Create`, `Instruction: Buy` and `GetFees` all succeeding. That
+closes the biggest gap. What remains untested is an actual signed send, a real
+sell, and a real fee claim — all blocked only on funding a devnet wallet.
+
+**Nothing has been sent to any chain.** Simulation proves the instructions are
+valid; it does not prove send/confirm/retry, nor that a position can be exited.
 
 **Polymarket is unconfirmed.** The Gamma API was unreachable from the build
 machine while every other host resolved normally — likely an egress restriction
@@ -44,16 +48,18 @@ published fee schedule, not observation.
 
 ## Path to live
 
-1. **Local validator with the cloned program** — the only free way to exercise a
-   real launch. Needs the Solana CLI, which is not currently installed.
-   ```bash
-   solana-test-validator --clone-upgradeable-program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P --url mainnet-beta --reset
-   ```
-   The program's global config account needs cloning too. Exercise create + dev
-   buy + sell.
+1. ~~Local validator with the cloned program~~ — **not needed.** pump.fun runs on
+   devnet. This step existed because of a wrong assumption.
 
-2. **Devnet** — wallet loading, signing, send/confirm/retry, priority fee
-   estimation, persistence across restart.
+2. **Devnet, funded.** A wallet already exists at `data/devnet-keypair.json`
+   (gitignored). The public faucet is rate-limited from this machine; fund it at
+   <https://faucet.solana.com> with its pubkey, then:
+   ```bash
+   TRENDBOT_CONFIG=devnet.json node src/cli.ts run --once   # launch.simulate: true
+   ```
+   Then flip `launch.simulate` to false for a real signed devnet launch, and
+   exercise a sell and a fee claim. **Use devnet, not testnet** — testnet's
+   deployment is stale and the SDK cannot decode it.
 
 3. **Mainnet, one manual launch at the smallest dev buy.** Verify on Solscan:
    mint created, metadata resolves from IPFS, dev buy landed, position recorded.

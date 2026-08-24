@@ -2,6 +2,7 @@ import type { Db } from "../util/db.ts";
 import type { Config } from "../config/schema.ts";
 import { log } from "../util/log.ts";
 import type { Capacity } from "./capacity.ts";
+import { isPretend } from "../config/schema.ts";
 
 /**
  * The single choke point for anything that costs SOL.
@@ -56,7 +57,7 @@ export class BudgetGuard {
   constructor(db: Db, cfg: Config) {
     this.#db = db;
     this.#cfg = cfg;
-    this.#mode = cfg.dryRun ? 1 : 0;
+    this.#mode = isPretend(cfg) ? 1 : 0;
   }
 
   /**

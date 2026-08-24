@@ -1,5 +1,5 @@
 import type { Db } from "../util/db.ts";
-import type { Config } from "../config/schema.ts";
+import { isPretend, type Config } from "../config/schema.ts";
 import { fetchJson } from "../util/http.ts";
 import { log, errFields } from "../util/log.ts";
 
@@ -71,7 +71,7 @@ export async function refreshOutcomes(db: Db, cfg: Config): Promise<number> {
        FROM launch_outcomes
       WHERE verdict = 'pending' AND dry_run = ?
       ORDER BY launched_at ASC LIMIT 40`,
-  ).all(cfg.dryRun ? 1 : 0) as Array<{
+  ).all(isPretend(cfg) ? 1 : 0) as Array<{
     mint: string; launched_at: number; entry_sol: number | null;
     first_mcap_usd: number | null; peak_mcap_usd: number | null;
   }>;
@@ -162,7 +162,7 @@ export function attributeFees(db: Db, cfg: Config, claimedSol: number, sinceMs: 
   const rows = db.prepare(
     `SELECT mint, peak_mcap_usd FROM launch_outcomes
       WHERE dry_run = ? AND launched_at > ? AND COALESCE(peak_mcap_usd, 0) > 0`,
-  ).all(cfg.dryRun ? 1 : 0, sinceMs) as Array<{ mint: string; peak_mcap_usd: number }>;
+  ).all(isPretend(cfg) ? 1 : 0, sinceMs) as Array<{ mint: string; peak_mcap_usd: number }>;
 
   const total = rows.reduce((s, r) => s + r.peak_mcap_usd, 0);
   if (total <= 0) return;
@@ -189,7 +189,7 @@ export function settledOutcomes(db: Db, cfg: Config, limit = 200): OutcomeRow[] 
     `SELECT * FROM launch_outcomes
       WHERE dry_run = ? AND verdict != 'pending'
       ORDER BY launched_at DESC LIMIT ?`,
-  ).all(cfg.dryRun ? 1 : 0, limit) as Array<Record<string, unknown>>;
+  ).all(isPretend(cfg) ? 1 : 0, limit) as Array<Record<string, unknown>>;
 
   return rows.map((r) => ({
     mint: String(r.mint),
@@ -212,7 +212,7 @@ export function settledOutcomes(db: Db, cfg: Config, limit = 200): OutcomeRow[] 
 }
 
 export function outcomeSummary(db: Db, cfg: Config) {
-  const m = cfg.dryRun ? 1 : 0;
+  const m = isPretend(cfg) ? 1 : 0;
   const r = db.prepare(
     `SELECT
        COUNT(*) total,
