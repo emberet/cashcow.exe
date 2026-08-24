@@ -1,6 +1,6 @@
 # Status
 
-Honest state of play. Updated 2026-08-24.
+Honest state of play. Updated 2026-08-25.
 
 ---
 
@@ -16,6 +16,9 @@ Honest state of play. Updated 2026-08-24.
 | Dashboard, both surfaces | Rendered and screenshotted at 800px and 1440px; no console errors; no horizontal overflow |
 | Gate funnel + declines | Recorded per tick and rendered; counts reconcile against the launch log |
 | Admin security boundary | curl: unauth → 401, wrong password → 401, missing/bad CSRF → 403, path traversal → 404 |
+| Gate detail panels | open/close/toggle, Escape, deep links, zero scroll movement, correct row placement at 4/2/1 columns |
+| Reading list | 24 items, every link `noopener noreferrer nofollow`, sources named, no overflow at 375px |
+| Wallet display | address + balance on both surfaces; `web.showWallet:false` hides it from public but not admin |
 | Secret containment | Admin payload scanned — no wallet secret, no password hash, no RPC URL |
 
 ---

@@ -66,7 +66,13 @@ Two surfaces on one port, with a hard boundary between them:
 | `http://127.0.0.1:4600/` | **Public.** Read-only, plain-English, safe to show anyone. |
 | `http://127.0.0.1:4600/admin` | **Admin.** Password-gated controls. |
 
-Three design decisions worth knowing:
+What the public page shows, top to bottom: a status header, the **chomp
+pipeline** (eight gates, each one clickable for its own detail), what it is
+**currently reading** with every source named and linked, the money, the charts,
+every coin it has created including the duds, what it turned away and why, the
+**dev wallet address and balance**, and the fee claims.
+
+Design decisions worth knowing:
 
 **The pre-launch candidate queue is admin-only.** A public page streaming "about
 to launch X" in real time is an invitation to be front-run by anyone watching
@@ -79,6 +85,25 @@ back by `web.declineDelayHours` (default 6), so reading the page can never
 front-run a launch. Gate counts are measured against what was actually
 **examined**, not what was scored — the loop stops looking once the allowance is
 gone, and reporting the remainder as rejections would flatter the filters.
+
+**Every gate opens its own detail.** Each card is a real anchor (`#gate-3`), so
+it is deep-linkable and the back button works. The panel opens *inside* the grid
+directly beneath the row you clicked, which is why nothing scrolls; clicking the
+same gate again closes it. Depth is tiered by disclosure risk — gates 1-4 are
+statistical only, gates 5-7 name terms from the delayed record, gate 8 is
+already on chain.
+
+**It publishes what it reads, chronologically.** Source name, publisher, the
+source's own headline, and a link to the original. Ordered by time and never by
+score: these are public feeds anyone can open, but *ranking* them would publish
+which topics sit near the launch line. Display is filtered on slurs only — the
+launch filters reject brands and tragedies because minting those is a legal
+hazard, while reading a headline about them is just news.
+
+**The wallet address and balance are published** (`web.showWallet`, default on).
+Both are already public: the page names every mint, and a token's creator and
+that creator's balance are one lookup away. Hiding them would obscure
+verification without concealing anything. The admin portal always shows them.
 
 **The web process never holds your wallet key.** Pause/resume works through the
 filesystem kill switch. Anything that spends SOL — force-sell, claim fees — is
