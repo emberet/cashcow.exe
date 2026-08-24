@@ -107,8 +107,11 @@ function render(d) {
     `<span>NET ${net >= 0 ? "+" : ""}${esc(sol(net))} SOL</span>`;
 
   // --- gate funnel
+  // Real anchors, not click handlers: deep-linkable, shareable, and the browser
+  // back button works without any routing code.
   $("gates").innerHTML = f.gates.map((g) => `
-    <div class="gate${g.jam ? " jam" : ""}${g.win ? " win" : ""}">
+    <a class="gate${g.jam ? " jam" : ""}${g.win ? " win" : ""}" href="#gate-${g.idx}"
+       aria-label="${esc(g.label)} — open detail">
       <div class="gate-top">
         <span class="gate-idx">${g.idx}</span>
         <span class="gate-tag">${g.jam ? "THE JAM" : g.win ? "YUM" : ""}</span>
@@ -117,7 +120,11 @@ function render(d) {
       <div class="gate-pass">${esc(int(g.pass))}</div>
       <div class="gate-unit">${esc(g.unit)}</div>
       <div class="gate-drop">${esc(g.drop)}</div>
-    </div>`).join("");
+      <span class="gate-more">what happened here →</span>
+    </a>`).join("");
+
+  gateData = d.gateDetails || [];
+  renderGateDetail();
 
   // --- pipeline notes
   // Read the funnel, not the decline list: declines are delayed for the public
@@ -194,6 +201,7 @@ function render(d) {
     : `<div class="card empty">No coins yet. It only burps when a trend clears every gate.</div>`;
 
   // --- declines
+  delayHours = d.declineDelayHours ?? 6;
   $("decline-delay").textContent = d.declineDelayHours
     ? `${d.declineDelayHours}-hour delay` : "live";
   $("declines").innerHTML = (d.declines || []).length
@@ -325,6 +333,108 @@ function applyDynamicStyles() {
     if (el) el.style.clipPath = edge;
   });
 }
+
+// ------------------------------------------------------------ gate detail
+
+let gateData = [];
+
+/** Which gate the URL is pointing at, or null. */
+function currentGate() {
+  const m = /^#gate-(\d+)$/.exec(location.hash);
+  return m ? Number(m[1]) : null;
+}
+
+function renderGateDetail() {
+  const panel = $("gate-detail");
+  if (!panel) return;
+
+  const idx = currentGate();
+  const g = gateData.find((x) => x.idx === idx);
+
+  if (!g) { panel.hidden = true; panel.innerHTML = ""; return; }
+  panel.hidden = false;
+
+  const stats = (g.stats || []).map((s) => `
+    <div class="gd-stat">
+      <div class="label">${esc(s.label)}</div>
+      <div class="gd-val num">${esc(String(s.value))}</div>
+    </div>`).join("");
+
+  const bars = (g.bars || []).length ? `
+    <div class="stack" style="gap:8px;margin-top:18px">
+      ${g.bars.map((b) => `
+        <div class="feedrow">
+          <span>${esc(b.label)}</span>
+          <span class="bar"><span data-w="${b.pct.toFixed(1)}" data-col="grass"></span></span>
+          <span class="n">${esc(int(b.n))}</span>
+        </div>
+        <div class="label" style="margin:-4px 0 4px 0">${esc(b.note || "")}</div>`).join("")}
+    </div>` : "";
+
+  const histo = (g.histogram || []).length ? `
+    <div class="stack" style="gap:8px;margin-top:18px">
+      ${(() => {
+        const max = Math.max(...g.histogram.map((h) => h.n), 1);
+        return g.histogram.map((h) => `
+          <div class="feedrow">
+            <span class="${h.aboveLine ? "deep strong" : ""}">${esc(h.label)}</span>
+            <span class="bar"><span data-w="${((h.n / max) * 100).toFixed(1)}"
+                  data-col="${h.aboveLine ? "grass" : "leaf"}"></span></span>
+            <span class="n">${esc(int(h.n))}</span>
+          </div>`).join("");
+      })()}
+    </div>
+    <p class="note">Darker bars are above the launch line.</p>` : "";
+
+  const rows = (g.rows || []).length
+    ? `<div style="margin-top:18px">
+        ${g.rows.map((r) => `
+          <div class="dashrow" style="grid-template-columns:1fr auto">
+            <span>${esc(r.term)}</span>
+            <span class="tag ${esc(r.tone || "")}">${esc(r.note)}</span>
+          </div>`).join("")}
+      </div>`
+    // An empty delayed list is the normal early state, not a fault. Say which.
+    : (g.delayed
+      ? `<div class="empty" style="padding:18px 0">Nothing has aged past the
+         ${esc(String(delayHours))}-hour delay yet. Anything turned away in the last
+         ${esc(String(delayHours))} hours appears here once it is old enough to be
+         useless to a front-runner.</div>`
+      : "");
+
+  const delayed = g.delayed ? `
+    <p class="note"><strong>Held back ${esc(String(delayHours))} hours.</strong>
+    Naming these live would tell you what the cow is looking at right now.</p>` : "";
+
+  panel.innerHTML = `
+    <div class="card gd">
+      <div class="section-head" style="margin-bottom:6px">
+        <span class="gate-idx">${g.idx}</span>
+        <h4 class="cardtitle" style="margin-right:auto">${esc(g.title)}</h4>
+        <a class="btn sm" href="#" id="gd-close">CLOSE</a>
+      </div>
+      <p style="font-weight:600;font-size:16.5px;margin:0 0 6px">${esc(g.what)}</p>
+      <p class="note" style="margin:0 0 16px">${esc(g.why)}</p>
+      <div class="gd-stats">${stats}</div>
+      ${bars}${histo}${rows}
+      ${g.note ? `<p class="note">${esc(g.note)}</p>` : ""}
+      ${delayed}
+    </div>`;
+
+  panel.querySelector("#gd-close")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    // Push a hash-free URL so Back returns to wherever they came from.
+    history.pushState("", document.title, location.pathname + location.search);
+    renderGateDetail();
+  });
+
+  applyDynamicStyles();
+  // `start` plus scroll-margin-top clears the sticky header; `nearest` did not.
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+let delayHours = 6;
+window.addEventListener("hashchange", renderGateDetail);
 
 // --------------------------------------------------------------- countdown
 

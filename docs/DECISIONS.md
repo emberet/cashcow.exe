@@ -384,3 +384,32 @@ listed, so the marginal disclosure is small.
 is configured, because `loadWallet` invents an ephemeral throwaway keypair in dry
 run. Publishing that would be worse than publishing nothing: it looks like a real
 wallet and changes on every restart.
+
+
+---
+
+## 21. The pipeline gates are deep-linkable, and the depth respects the delay
+
+**Decision.** Each of the eight gate cards is an `<a href="#gate-N">`, opening an
+in-page detail panel. Real anchors rather than click handlers, so every gate is
+shareable, the browser back button works, and it degrades to a plain link with
+no routing code.
+
+**What the depth is allowed to contain.** The same disclosure rule that governs
+the decline list applies per gate, because the gates are where launch intent
+lives:
+
+| gates | depth shown | why it is safe |
+|---|---|---|
+| 1–3 | per-source volume, phrase ratios, sighting thresholds | pure aggregate, no candidate named |
+| 4 | score histogram of decisions **already made**, last 7 days | the live queue is never shown — publishing what is near the line is a launch tip |
+| 5–7 | named terms, from the **delayed** decline record only | old enough to be useless to a front-runner |
+| 8 | the launches themselves | already on chain |
+
+**An empty delayed list is a normal state, not a fault**, and says so: "nothing
+has aged past the 6-hour delay yet". A blank panel would read as broken.
+
+**A small implementation trap.** The topbar is sticky, so anchor landings put the
+panel's own heading underneath it. Fixed with `scroll-margin-top` plus
+`block: "start"`; `block: "nearest"` looked correct in the DOM and wrong on
+screen.

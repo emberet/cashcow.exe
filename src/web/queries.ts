@@ -353,6 +353,202 @@ export type WalletView = {
   network: string;
 };
 
+/** Signals per feed over a window, for the gate-1 breakdown. */
+function signalsByFeed(db: Db, hours: number) {
+  const rows = db.prepare(
+    `SELECT feed, COUNT(*) n, COUNT(DISTINCT norm) terms
+       FROM signals WHERE ingested_at > ? GROUP BY feed ORDER BY n DESC`,
+  ).all(Date.now() - hours * HOUR) as Array<{ feed: string; n: number; terms: number }>;
+  return rows;
+}
+
+/** Buckets, never raw terms: a live score list would say what is about to launch. */
+function scoreHistogram(db: Db, cfg: Config) {
+  const m = mode(cfg);
+  const since = Date.now() - 7 * 24 * HOUR;
+  const decided = [
+    ...(db.prepare(`SELECT score FROM declined WHERE dry_run = ? AND ts > ?`)
+      .all(m, since) as Array<{ score: number }>),
+    ...(db.prepare(`SELECT score FROM launches WHERE dry_run = ? AND created_at > ?`)
+      .all(m, since) as Array<{ score: number }>),
+  ].map((r) => Number(r.score ?? 0)).filter((n) => n > 0);
+
+  const buckets = [
+    { label: "under 50", lo: 0, hi: 50 },
+    { label: "50-60", lo: 50, hi: 60 },
+    { label: "60-65", lo: 60, hi: 65 },
+    { label: "65-70", lo: 65, hi: 70 },
+    { label: "70-80", lo: 70, hi: 80 },
+    { label: "80+", lo: 80, hi: Infinity },
+  ];
+  return buckets.map((b) => ({
+    label: b.label,
+    n: decided.filter((s) => s >= b.lo && s < b.hi).length,
+    aboveLine: b.lo >= cfg.scoring.threshold,
+  }));
+}
+
+/** Competitor counts parsed out of the saturation reason we already stored. */
+function crowdedDetail(db: Db, cfg: Config, delayHours: number, limit = 10) {
+  const rows = db.prepare(
+    `SELECT term, detail, ts FROM declined
+      WHERE dry_run = ? AND reason = 'crowded' AND ts < ?
+      ORDER BY ts DESC LIMIT ?`,
+  ).all(mode(cfg), Date.now() - delayHours * HOUR, limit) as Array<Record<string, unknown>>;
+
+  return rows.map((r) => {
+    const detail = String(r.detail ?? "");
+    const m = detail.match(/^(\d+) similar/);
+    return {
+      term: String(r.term),
+      rivals: m ? Number(m[1]) : null,
+      ts: Number(r.ts),
+    };
+  });
+}
+
+/**
+ * Per-gate depth for the pipeline.
+ *
+ * The disclosure rule is the same one that governs the decline list: aggregate
+ * numbers publish live, but anything that NAMES a term the bot is currently
+ * weighing is held back, because that is a launch tip. Gates 1-4 are therefore
+ * statistical; gates 5-7 name terms only from the delayed record; gate 8 is
+ * already fully public because the tokens exist on chain.
+ */
+export function gateDetails(db: Db, cfg: Config, delayHours: number) {
+  const f = pipelineFunnel(db, cfg);
+  const g = (i: number) => f.gates[i];
+  const declines = recentDeclines(db, cfg, delayHours, 40);
+  const byFeed = signalsByFeed(db, 24);
+  const totalSignals = byFeed.reduce((n, r) => n + r.n, 0);
+
+  const contentReasons = new Set(["REAL BRAND OR PERSON", "TRAGEDY", "FOUL LANGUAGE", "ON YOUR BLOCKLIST"]);
+
+  return [
+    {
+      idx: 1,
+      title: "Sniffed",
+      what: "Every mention pulled from every source in the last 24 hours, before any filtering.",
+      why: "Ten independent sources are polled on their own schedules. One noisy board can dominate the raw count without meaning much — which is exactly why agreement across families is scored later.",
+      stats: [
+        { label: "Mentions collected", value: g(0)?.pass ?? 0 },
+        { label: "Distinct sources reporting", value: byFeed.length },
+      ],
+      bars: byFeed.map((r) => ({
+        label: r.feed,
+        n: r.n,
+        pct: totalSignals > 0 ? (r.n / totalSignals) * 100 : 0,
+        note: `${r.terms} distinct topics`,
+      })),
+      delayed: false,
+    },
+    {
+      idx: 2,
+      title: "Different topics",
+      what: "Raw mentions chopped into comparable key phrases, so a Reddit headline and a Google search term can be recognised as the same subject.",
+      why: "Sources disagree about shape. Google Trends gives a bare term, Reddit gives a whole sentence. Without reducing both to the same key, cross-source agreement could never be detected at all.",
+      stats: [
+        { label: "Mentions in", value: g(0)?.pass ?? 0 },
+        { label: "Key phrases out", value: g(1)?.pass ?? 0 },
+        {
+          label: "Phrases per mention",
+          value: (g(0)?.pass ?? 0) > 0 ? ((g(1)?.pass ?? 0) / (g(0)?.pass ?? 1)).toFixed(2) : "0",
+        },
+      ],
+      delayed: false,
+    },
+    {
+      idx: 3,
+      title: "Seen enough",
+      what: `A topic must be spotted at least ${cfg.scoring.minObservations} times before it is trusted.`,
+      why: "Speed is measured by comparing recent activity against earlier activity. A topic seen exactly once has no earlier half to compare against, so it looks maximally fast — which is how a freshly started bot would launch on pure noise.",
+      stats: [
+        { label: "Topics tracked", value: g(2)?.pass ?? 0 },
+        { label: "Sightings needed", value: cfg.scoring.minObservations },
+        { label: "Warmup required", value: `${cfg.scoring.warmupMinutes} min` },
+      ],
+      delayed: false,
+    },
+    {
+      idx: 4,
+      title: `Score over ${Math.round(cfg.scoring.threshold)}`,
+      what: "Each topic gets a score out of 100 from how fast it is growing, how independent its sources are, whether a memecoin crowd would care, and whether it makes a usable ticker.",
+      why: "Not how big a topic is — how fast it is growing. Something already huge usually has forty coins chasing it.",
+      stats: [
+        { label: "Threshold", value: Math.round(cfg.scoring.threshold) },
+        { label: "Speed weight", value: `${Math.round(cfg.scoring.weights.velocity * 100)}%` },
+        { label: "Source independence", value: `${Math.round(cfg.scoring.weights.corroboration * 100)}%` },
+        { label: "Crowd appeal", value: `${Math.round(cfg.scoring.weights.cryptoAffinity * 100)}%` },
+      ],
+      histogram: scoreHistogram(db, cfg),
+      note: "Scores of topics already decided on, over the last 7 days. The live queue is not shown — publishing what is currently near the line would let anyone jump ahead of a launch.",
+      delayed: false,
+    },
+    {
+      idx: 5,
+      title: "Not naughty",
+      what: "Real brands, real people, tragedies and slurs are rejected before a single lamport is spent.",
+      why: "Minting a trending brand invites a trademark claim and a takedown; minting a disaster gets the coin removed, which kills the fee stream that is the entire point. A rejected topic costs nothing. A rejected launch costs rent, fees and possibly a lawyer.",
+      stats: [
+        { label: "Passed clean", value: g(4)?.pass ?? 0 },
+        { label: "Turned away", value: declines.filter((d) => contentReasons.has(d.reason)).length },
+      ],
+      rows: declines
+        .filter((d) => contentReasons.has(d.reason))
+        .slice(0, 10)
+        .map((d) => ({ term: d.term, note: d.reason, tone: d.tone })),
+      delayed: true,
+    },
+    {
+      idx: 6,
+      title: "Nobody there first",
+      what: "If other people have already minted coins for this trend, it skips.",
+      why: "Fees are a share of THIS coin's trading. When forty coins chase one trend the volume fragments and a launch earns nothing — while still paying rent and priority fees. This is the gate that turns away the most promising-looking topics, and skipping is almost always the right call.",
+      stats: [
+        { label: "Uncrowded", value: g(5)?.pass ?? 0 },
+        { label: "Already taken", value: f.crowdedOut ?? 0 },
+        { label: "Rival limit", value: cfg.saturation.maxSimilar },
+      ],
+      rows: crowdedDetail(db, cfg, delayHours).map((c) => ({
+        term: c.term,
+        note: c.rivals != null ? `${c.rivals} rival coins` : "already minted",
+        tone: "pink",
+      })),
+      delayed: true,
+    },
+    {
+      idx: 7,
+      title: "Can afford it",
+      what: "A hard daily ceiling on launches and on SOL, checked before every transaction.",
+      why: "The limits are enforced in one place that every spending path must pass through. A bug in the trend loop cannot spend past them.",
+      stats: [
+        { label: "Launches allowed / day", value: cfg.risk.maxLaunchesPerDay },
+        { label: "SOL allowed / day", value: cfg.risk.maxSolPerDay },
+        { label: "Buys of each coin", value: cfg.devPosition.enabled ? `${cfg.devPosition.buySol} SOL` : "nothing" },
+        { label: "Stops after losses of", value: `${cfg.risk.maxDailyLossSol} SOL` },
+      ],
+      rows: declines
+        .filter((d) => d.reason === "ALLOWANCE GONE")
+        .slice(0, 6)
+        .map((d) => ({ term: d.term, note: "allowance already spent", tone: "milk" })),
+      delayed: true,
+    },
+    {
+      idx: 8,
+      title: "Burped a coin",
+      what: "What survived every gate and was actually minted, duds included.",
+      why: "The list below is the honest record. Most launches earn nothing — that is the base rate of this whole idea, not a malfunction.",
+      stats: [
+        { label: "Coins created", value: g(7)?.pass ?? 0 },
+        { label: "Still held", value: headlineStats(db, cfg).openPositions },
+      ],
+      note: "Every coin is listed further down this page with its peak market cap and result.",
+      delayed: false,
+    },
+  ];
+}
+
 /**
  * Refresh the cached balance. Async, so the caller decides when to pay for it;
  * the snapshot readers stay synchronous and never block the SSE push loop.
@@ -412,6 +608,7 @@ export function publicSnapshot(db: Db, cfg: Config, kill: KillSwitch) {
     // Public sees declines only after a delay -- see recentDeclines().
     declines: recentDeclines(db, cfg, cfg.web.declineDelayHours),
     declineDelayHours: cfg.web.declineDelayHours,
+    gateDetails: gateDetails(db, cfg, cfg.web.declineDelayHours),
     claims: feeClaims(db, cfg),
     nextPollSeconds: nextPollSeconds(db, cfg),
     launchesToday: headlineStats(db, cfg).launches24h,
@@ -572,6 +769,8 @@ export function adminSnapshot(db: Db, cfg: Config, kill: KillSwitch, walletBalan
     funnel: pipelineFunnel(db, cfg),
     // Admin sees declines immediately; there is nothing to front-run yourself.
     declines: recentDeclines(db, cfg, 0, 12),
+    // Admin sees the same depth with no delay applied.
+    gateDetails: gateDetails(db, cfg, 0),
     claims: feeClaims(db, cfg),
     nextPollSeconds: nextPollSeconds(db, cfg),
     positions: openPositions(db, cfg),

@@ -561,3 +561,59 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   font-size: 12.5px; font-weight: 600; word-break: break-all;
 }
 .sidebar .purse a { border-bottom-width: 2px; }
+
+/* ---------------------------------------------------- clickable gate cards */
+
+/* The gates are anchors now, so the link defaults have to be undone. */
+a.gate {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 4px solid var(--ink);
+  cursor: pointer;
+  transition: transform .1s ease, box-shadow .1s ease;
+}
+a.gate:hover {
+  color: inherit;
+  border-bottom-color: var(--ink);
+  transform: translate(-2px, -2px);
+  box-shadow: 9px 9px 0 var(--ink);
+}
+a.gate:active { transform: translate(2px, 2px); box-shadow: 3px 3px 0 var(--ink); }
+a.gate:focus-visible { outline: 4px solid var(--deep); outline-offset: 4px; }
+
+.gate-more {
+  margin-top: 10px;
+  font-family: var(--display);
+  font-size: 12.5px;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+a.gate:hover .gate-more, a.gate:focus-visible .gate-more { opacity: .75; }
+/* Touch devices get no hover, so always show the affordance there. */
+@media (hover: none) { .gate-more { opacity: .7; } }
+
+/* ------------------------------------------------------------ gate detail */
+
+.gd { border-width: 4px; box-shadow: var(--shadow-lg); margin-bottom: 22px; }
+/* The topbar is sticky, so anchor/scrollIntoView landings must clear it or the
+   panel's own heading ends up hidden underneath. */
+#gate-detail { scroll-margin-top: 90px; }
+.gd .gate-idx { width: 36px; height: 36px; font-size: 17px; }
+
+.gd-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+.gd-stat {
+  background: var(--cream);
+  border: 3px solid var(--ink);
+  border-radius: 14px;
+  padding: 11px 13px;
+}
+.gd-val {
+  font-family: var(--display);
+  font-size: 27px;
+  line-height: 1.05;
+  margin-top: 2px;
+}
