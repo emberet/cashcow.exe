@@ -4,149 +4,143 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>TrendBot — live</title>
+<title>cashcow.exe</title>
 <link rel="stylesheet" href="/styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐄</text></svg>">
 </head>
 <body>
-<div class="wrap">
 
-  <header class="top">
-    <div class="brand">
-      <div class="mark">T</div>
-      <div>
-        <h1>TrendBot</h1>
-        <p>Trend detection → Solana token launcher</p>
-      </div>
-    </div>
-    <div class="pill" id="status-pill"><span class="dot"></span><span id="status-label">Connecting…</span></div>
-  </header>
-
-  <div class="hero">
-    <h2>It watches what the internet is suddenly talking about.</h2>
-    <p>
-      Every few minutes this bot reads <span id="hero-nsources">ten</span> different sources —
-      Google searches, news wires, Reddit, Wikipedia, message boards, prediction markets, and
-      Solana itself — looking for a topic that is picking up speed <em>right now</em>. When
-      something clears its bar, it creates a coin for that trend on pump.fun and earns a small
-      share of the fees whenever people trade it.
-    </p>
-    <div class="status-note" id="status-detail">Waiting for the first update…</div>
+<div class="topbar">
+  <div class="inner">
+    <span class="wordmark">cashcow.exe</span>
+    <span class="pill sun" id="p-mode">PLAY MONEY</span>
+    <span class="pill sky" id="p-network">devnet</span>
+    <span class="pill leaf" id="p-status">MUNCHING <span class="blinker"></span></span>
+    <span class="pill num" id="p-countdown">next sniff —</span>
   </div>
-
-  <div class="stats">
-    <div class="stat">
-      <div class="label">Coins created</div>
-      <div class="value" id="s-total">—</div>
-      <div class="sub" id="s-today">—</div>
-    </div>
-    <div class="stat">
-      <div class="label">Fees earned</div>
-      <div class="value" id="s-fees">—</div>
-      <div class="sub">SOL, from people trading its coins</div>
-    </div>
-    <div class="stat">
-      <div class="label">Holding now</div>
-      <div class="value" id="s-open">—</div>
-      <div class="sub" id="s-open-sub">positions it hasn't sold yet</div>
-    </div>
-    <div class="stat">
-      <div class="label">Trends tracked</div>
-      <div class="value" id="s-terms">—</div>
-      <div class="sub" id="s-signals">in the last 24 hours</div>
-    </div>
-  </div>
-
-  <section>
-    <h3 class="section">How it decides</h3>
-    <div class="steps">
-      <div class="step">
-        <div class="num">1</div>
-        <h5>Listen everywhere</h5>
-        <p>Independent sources are polled, each on its own schedule. Every one reports what people are talking about.</p>
-      </div>
-      <div class="step">
-        <div class="num">2</div>
-        <h5>Measure the speed</h5>
-        <p>Not how big a topic is — how fast it's <em>growing</em>. Something already huge is usually too late.</p>
-      </div>
-      <div class="step">
-        <div class="num">3</div>
-        <h5>Want a second opinion</h5>
-        <p>A spike on one noisy source is ignored. A topic has to show up on at least two independent ones.</p>
-      </div>
-      <div class="step">
-        <div class="num">4</div>
-        <h5>Screen it out</h5>
-        <p>Real brands, real people, and anything tied to a tragedy are rejected before a single cent is spent.</p>
-      </div>
-      <div class="step">
-        <div class="num">5</div>
-        <h5>Check who got there first</h5>
-        <p>If other people already made coins for this trend, it skips. Splitting attention forty ways earns nothing.</p>
-      </div>
-      <div class="step">
-        <div class="num">6</div>
-        <h5>Launch, then exit by rule</h5>
-        <p>It buys a small fixed amount of its own coin and sells on preset rules — never on a hunch.</p>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h3 class="section">Activity</h3>
-    <div class="grid-2">
-      <div class="card">
-        <h4>Chatter it's tracking</h4>
-        <p class="hint">Mentions collected per hour across all sources, last 48 hours.</p>
-        <div id="chart-signals"></div>
-      </div>
-      <div class="card">
-        <h4>Running profit &amp; loss</h4>
-        <p class="hint">Cumulative result of positions it has opened and closed, in SOL.</p>
-        <div id="chart-pnl"></div>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h3 class="section">Coins it has created</h3>
-    <div class="launches" id="launches"><div class="empty">Nothing launched yet.</div></div>
-  </section>
-
-  <section>
-    <h3 class="section">Where its information comes from</h3>
-    <div class="card">
-      <p class="hint">A green dot means that source reported something in the last hour.</p>
-      <div class="feedlist" id="feeds"></div>
-    </div>
-  </section>
-
-  <section>
-    <div class="grid-2">
-      <div class="card">
-        <h4>Which sources find the winners</h4>
-        <p class="hint">How often each source contributed to a coin that actually got launched.</p>
-        <div id="attribution"><div class="empty">No launches yet.</div></div>
-      </div>
-      <div class="card">
-        <h4>The rules it follows</h4>
-        <p class="hint">These are hard limits. The bot cannot exceed them, even if it wants to.</p>
-        <dl class="kv" id="rules"></dl>
-      </div>
-    </div>
-  </section>
-
-  <footer>
-    <p>
-      <strong>This is an experiment, not an investment product.</strong>
-      Nothing here is financial advice. Memecoins are extremely high risk and most lose
-      value quickly. The bot's own results are shown honestly, including losses.
-    </p>
-    <p id="foot-meta" class="faint"></p>
-  </footer>
-
 </div>
+
+<div class="wrap">
+  <div class="hero">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <div class="bubble" id="hero-bubble">Moo. Warming up my nose…</div>
+        <p>
+          Every gate that can say <em>no</em> for free runs before any gate that costs a
+          single lamport. Below is exactly where today's grass got chewed up and spat out.
+        </p>
+      </div>
+      <div class="hero-cow">
+        <!-- Inline so the page has no external asset that can go missing. -->
+        <svg viewBox="0 0 280 210" role="img" aria-label="A cartoon cow, chewing">
+          <ellipse cx="140" cy="196" rx="86" ry="10" fill="#1a1a1a" opacity=".15"/>
+          <!-- legs first, so the body overlaps their tops cleanly -->
+          <rect x="58" y="128" width="21" height="56" rx="10" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6"/>
+          <rect x="96" y="128" width="21" height="56" rx="10" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6"/>
+          <rect x="150" y="128" width="21" height="56" rx="10" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6"/>
+          <path d="M40 96c-14 4-20 18-14 28" fill="none" stroke="#1a1a1a" stroke-width="6" stroke-linecap="round"/>
+          <ellipse cx="26" cy="128" rx="8" ry="10" fill="#1a1a1a"/>
+          <rect x="38" y="58" width="150" height="84" rx="40" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6"/>
+          <ellipse cx="80" cy="84" rx="20" ry="16" fill="#1a1a1a"/>
+          <ellipse cx="132" cy="112" rx="15" ry="12" fill="#1a1a1a"/>
+          <ellipse cx="205" cy="82" rx="50" ry="45" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6"/>
+          <path d="M166 50c-14-13-34-11-38 3 12 2 21 8 26 18z" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6" stroke-linejoin="round"/>
+          <path d="M244 50c14-13 34-11 38 3-12 2-21 8-26 18z" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6" stroke-linejoin="round"/>
+          <ellipse cx="190" cy="72" rx="6" ry="8" fill="#1a1a1a"/>
+          <ellipse cx="224" cy="72" rx="6" ry="8" fill="#1a1a1a"/>
+          <ellipse cx="207" cy="104" rx="32" ry="21" fill="#ff9eb5" stroke="#1a1a1a" stroke-width="6"/>
+          <ellipse cx="197" cy="102" rx="4" ry="5" fill="#1a1a1a"/>
+          <ellipse cx="218" cy="102" rx="4" ry="5" fill="#1a1a1a"/>
+        </svg>
+      </div>
+    </div>
+    <div class="grass-strip">
+      <div class="tips" id="grass-tips-1"></div>
+      <div class="readout" id="hero-readout">
+        <span>IN — RUMOURS</span><span>·</span><span>OUT — COINS</span><span>·</span><span>NET — SOL</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="padding-top:34px"></div>
+
+  <div class="section-head">
+    <h2 class="big">The chomp pipeline</h2>
+    <span class="pill">LAST 24 HOURS</span>
+  </div>
+  <div class="gates" id="gates"></div>
+
+  <div class="grid-2 mb-l" id="pipeline-notes"></div>
+
+  <div class="section-head">
+    <h2 class="big">Does the cow pay rent?</h2>
+    <span class="pill">FEES ARE THE MILK</span>
+  </div>
+  <div class="grid-4 mb-l" id="money-plates"></div>
+
+  <div class="grid-2 mb-l">
+    <div class="card">
+      <div class="section-head" style="margin-bottom:12px">
+        <h4 class="cardtitle" style="margin-right:auto">Grass to graze</h4>
+        <span class="label" id="chart-cap">mentions / hour · 48h</span>
+      </div>
+      <div id="chart-signals"></div>
+    </div>
+    <div class="card">
+      <div class="section-head" style="margin-bottom:12px">
+        <h4 class="cardtitle" style="margin-right:auto">Where it sniffs</h4>
+        <span class="label">last hour</span>
+      </div>
+      <div class="stack" style="gap:8px" id="feeds"></div>
+      <p class="note">Green bars have fed a real launch. Pale bars are still just noise.</p>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <h2 class="big">Every coin it has burped</h2>
+    <span class="pill" id="launch-count">DUDS INCLUDED</span>
+  </div>
+  <div class="stack mb-l" style="gap:12px" id="launches"></div>
+
+  <div class="grid-2 mb-l">
+    <div class="card">
+      <div class="section-head" style="margin-bottom:10px">
+        <h4 class="cardtitle" style="margin-right:auto">Grass it spat out</h4>
+        <span class="label" id="decline-delay">delayed</span>
+      </div>
+      <div id="declines"></div>
+      <p class="note">Delayed on purpose, so reading this page can never front-run a launch.</p>
+    </div>
+    <div class="card">
+      <div class="section-head" style="margin-bottom:12px">
+        <h4 class="cardtitle" style="margin-right:auto">Fences it cannot jump</h4>
+        <span class="label">hard limits</span>
+      </div>
+      <div class="stack" style="gap:13px" id="fences"></div>
+    </div>
+  </div>
+
+  <div class="card mb-l">
+    <div class="section-head" style="margin-bottom:10px">
+      <h4 class="cardtitle" style="margin-right:auto">Milk collected</h4>
+      <span class="label">measured, not guessed</span>
+    </div>
+    <div id="claims"></div>
+  </div>
+
+  <div class="disclaimer">
+    <p>
+      <span style="font-family:var(--display)">This is a silly experiment, not an investment product.</span>
+      Nothing here is financial advice. Memecoins are extremely high risk and most lose value
+      fast. Per-token fees are estimated — pump.fun claims creator fees in bulk, so they can only
+      be split by each token's share of observed performance. The exact total is the milk table above.
+    </p>
+    <p class="meta" id="foot-meta"></p>
+  </div>
+</div>
+
+<div class="footer-grass"><div class="tips" id="grass-tips-2"></div></div>
+
 <script src="/app.js"></script>
 </body>
 </html>

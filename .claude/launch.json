@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "trendbot-dashboard",
+      "name": "cashcow-dashboard",
       "runtimeExecutable": "node",
       "runtimeArgs": ["src/cli.ts", "web"],
       "port": 4600

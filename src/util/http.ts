@@ -1,6 +1,6 @@
 import { log, errFields } from "./log.ts";
 
-export const USER_AGENT = "trendbot/0.1";
+export const USER_AGENT = "cashcow.exe/0.1";
 
 export type FetchOpts = {
   timeoutMs?: number;

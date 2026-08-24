@@ -220,6 +220,48 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_tuning_ts ON tuning_runs(ts);
   `,
+
+  // v5 -- the funnel, and why things were turned away
+  `
+  -- One row per launch tick. The dashboard's headline is the attrition story:
+  -- how many rumours came in, and where each one died. Without persisting it
+  -- the page could only ever show the current instant.
+  CREATE TABLE pipeline_stats (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          INTEGER NOT NULL,
+    sniffed     INTEGER NOT NULL DEFAULT 0,
+    phrases     INTEGER NOT NULL DEFAULT 0,
+    terms       INTEGER NOT NULL DEFAULT 0,
+    warm        INTEGER NOT NULL DEFAULT 0,
+    scored      INTEGER NOT NULL DEFAULT 0,
+    -- How many of the scored candidates were actually LOOKED AT. The loop stops
+    -- examining once the daily allowance is gone, so without this the funnel
+    -- would report the unexamined remainder as rejections.
+    examined    INTEGER NOT NULL DEFAULT 0,
+    clean       INTEGER NOT NULL DEFAULT 0,
+    uncrowded   INTEGER NOT NULL DEFAULT 0,
+    affordable  INTEGER NOT NULL DEFAULT 0,
+    launched    INTEGER NOT NULL DEFAULT 0,
+    dry_run     INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX idx_pipeline_ts ON pipeline_stats(ts, dry_run);
+
+  -- Candidates that cleared the score threshold and were then turned away.
+  -- Surfaced publicly on a DELAY (see web/queries.ts): showing live what the
+  -- bot is about to reject still reveals what it is looking at.
+  CREATE TABLE declined (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts      INTEGER NOT NULL,
+    term    TEXT    NOT NULL,
+    norm    TEXT    NOT NULL,
+    reason  TEXT    NOT NULL,
+    detail  TEXT,
+    score   REAL,
+    dry_run INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX idx_declined_ts ON declined(ts, dry_run);
+  CREATE INDEX idx_declined_norm ON declined(norm, ts);
+  `,
 ];
 
 export function openDb(dbPath: string): Db {

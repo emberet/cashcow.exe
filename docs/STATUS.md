@@ -1,6 +1,6 @@
 # Status
 
-Honest state of play. Updated 2026-08-23.
+Honest state of play. Updated 2026-08-24.
 
 ---
 
@@ -13,7 +13,8 @@ Honest state of play. Updated 2026-08-23.
 | Feed adapters | Live polls. 6 of 9 enabled feeds producing; 300 signals/poll |
 | Full signal pipeline | End-to-end dry run: feeds → phrases → score → filters → saturation → naming → artwork → recorded launch |
 | Budget enforcement | Dry run hit the daily launch cap and stopped correctly |
-| Dashboard, both surfaces | Rendered and screenshotted; no console errors; no horizontal overflow at 375px |
+| Dashboard, both surfaces | Rendered and screenshotted at 800px and 1440px; no console errors; no horizontal overflow |
+| Gate funnel + declines | Recorded per tick and rendered; counts reconcile against the launch log |
 | Admin security boundary | curl: unauth → 401, wrong password → 401, missing/bad CSRF → 403, path traversal → 404 |
 | Secret containment | Admin payload scanned — no wallet secret, no password hash, no RPC URL |
 

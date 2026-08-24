@@ -52,6 +52,34 @@ export type TickStats = {
   rejected: Record<string, number>;
 };
 
+/** The attrition story for one tick, persisted so the dashboard can show it. */
+type Funnel = {
+  sniffed: number; phrases: number; terms: number; warm: number;
+  scored: number; examined: number; clean: number;
+  uncrowded: number; affordable: number; launched: number;
+};
+
+function recordDecline(
+  db: Db, cfg: Config,
+  a: { term: string; norm: string; reason: string; detail: string; score: number },
+): void {
+  db.prepare(
+    `INSERT INTO declined (ts, term, norm, reason, detail, score, dry_run)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(Date.now(), a.term, a.norm, a.reason, a.detail.slice(0, 200), a.score, cfg.dryRun ? 1 : 0);
+}
+
+function recordFunnel(db: Db, cfg: Config, f: Funnel): void {
+  db.prepare(
+    `INSERT INTO pipeline_stats
+       (ts, sniffed, phrases, terms, warm, scored, examined, clean, uncrowded, affordable, launched, dry_run)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    Date.now(), f.sniffed, f.phrases, f.terms, f.warm, f.scored, f.examined,
+    f.clean, f.uncrowded, f.affordable, f.launched, cfg.dryRun ? 1 : 0,
+  );
+}
+
 export async function runLoop(
   db: Db, cfg: Config, budget: BudgetGuard, kill: KillSwitch,
 ): Promise<void> {
@@ -60,7 +88,7 @@ export async function runLoop(
 
   kill.installSignalHandlers(() => { stopping = true; });
 
-  log.info("trendbot started", {
+  log.info("cashcow.exe started", {
     mode: cfg.dryRun ? "DRY RUN (no transactions)" : "LIVE",
     network: cfg.network,
     feeds: enabledFeeds(cfg).map((f) => f.adapter.id),
@@ -143,25 +171,38 @@ export async function launchTick(
   // resuming does not start from a cold start with meaningless velocity.
   const results = await pollAll(ctx);
   const weights = new Map(enabledFeeds(cfg).map(({ adapter, weight }) => [adapter.id, weight]));
-  ingestSignals(db, results.flatMap((r) => r.signals), weights);
+  const rawSignals = results.flatMap((r) => r.signals);
+  const phraseCount = ingestSignals(db, rawSignals, weights);
 
   const candidates = buildCandidates(db, cfg.scoring);
   stats.candidates = candidates.length;
 
+  const funnel: Funnel = {
+    sniffed: rawSignals.length,
+    phrases: phraseCount,
+    terms: candidates.length,
+    warm: candidates.filter((c) => c.observations >= cfg.scoring.minObservations).length,
+    scored: 0, examined: 0, clean: 0, uncrowded: 0, affordable: 0, launched: 0,
+  };
+
   if (!kill.allowsNewLaunches()) {
     log.info("halted: skipping launches", { reason: kill.haltReason(), candidates: candidates.length });
+    recordFunnel(db, cfg, funnel);
     return stats;
   }
 
   const warm = checkWarmup(db, cfg.scoring);
   if (!warm.warm) {
     log.info("warming up", { spanMinutes: warm.spanMinutes.toFixed(1), reason: warm.reason });
+    recordFunnel(db, cfg, funnel);
     return stats;
   }
 
   const passing = qualifying(candidates, cfg.scoring);
   stats.qualified = passing.length;
+  funnel.scored = passing.length;
   if (!passing.length) {
+    recordFunnel(db, cfg, funnel);
     log.debug("no candidate cleared the threshold", {
       candidates: candidates.length, threshold: cfg.scoring.threshold,
       best: candidates[0]?.score.toFixed(1),
@@ -173,14 +214,20 @@ export async function launchTick(
 
   for (const candidate of passing) {
     if (!kill.allowsNewLaunches()) break;
+    funnel.examined++;
 
     // --- free rejections first -------------------------------------------
     const contentCheck = checkTerm(candidate.term, filters);
     if (!contentCheck.allowed) {
       log.info("candidate rejected by filter", { term: candidate.term, reason: contentCheck.reason });
       reject(contentCheck.category);
+      recordDecline(db, cfg, {
+        term: candidate.term, norm: candidate.key, score: candidate.score,
+        reason: contentCheck.category, detail: contentCheck.reason,
+      });
       continue;
     }
+    funnel.clean++;
 
     const saturation = await checkSaturation(
       db, candidate.term, undefined, cfg.saturation, pumpFunMarket,
@@ -188,8 +235,13 @@ export async function launchTick(
     if (saturation.saturated) {
       log.info("candidate saturated, skipping", { term: candidate.term, reason: saturation.reason });
       reject("saturated");
+      recordDecline(db, cfg, {
+        term: candidate.term, norm: candidate.key, score: candidate.score,
+        reason: "crowded", detail: saturation.reason ?? "",
+      });
       continue;
     }
+    funnel.uncrowded++;
 
     // --- budget, before anything expensive --------------------------------
     const devBuySol = cfg.devPosition.enabled ? cfg.devPosition.buySol : 0;
@@ -208,17 +260,27 @@ export async function launchTick(
     if (!allowed.ok) {
       log.info("launch denied by budget", { term: candidate.term, code: allowed.code, reason: allowed.reason });
       reject(`budget:${allowed.code}`);
+      recordDecline(db, cfg, {
+        term: candidate.term, norm: candidate.key, score: candidate.score,
+        reason: "budget", detail: allowed.reason,
+      });
       // Daily caps will not clear within this tick; stop trying.
       break;
     }
+    funnel.affordable++;
 
     try {
       await launchCandidate(db, cfg, budget, candidate, filters, estimate);
       stats.launched++;
+      funnel.launched++;
     } catch (e) {
       if (e instanceof RiskyTrendError) {
         log.info("candidate rejected by risk screen", { term: candidate.term, reason: e.message });
         reject(`risk:${e.category}`);
+        recordDecline(db, cfg, {
+          term: candidate.term, norm: candidate.key, score: candidate.score,
+          reason: e.category, detail: e.message,
+        });
         continue;
       }
       if (e instanceof BudgetDenied) {
@@ -231,6 +293,7 @@ export async function launchTick(
     }
   }
 
+  recordFunnel(db, cfg, funnel);
   return stats;
 }
 

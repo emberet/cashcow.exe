@@ -215,3 +215,38 @@ invitation to be front-run by anyone watching it, which destroys the edge the
 whole bot depends on. Outcome verdicts *are* public, including duds — peak market
 cap is public on pump.fun anyway, and honesty about failures is the page's
 credibility.
+
+
+---
+
+## 13. The public page publishes rejections, but on a delay
+
+**Context.** The gate funnel is the most interesting thing the bot produces —
+it is the whole "where did the day go" story. But a live feed of *which* terms
+were just rejected still reveals what the bot is looking at right now.
+
+**Decision.** Aggregate funnel counts publish live; the named decline list is
+held back by `web.declineDelayHours` (default 6). The admin portal sees both
+immediately, since there is nothing to front-run yourself.
+
+**A bug this caused, and the rule it produced.** The "right now" banner
+originally counted the *delayed* decline list, so it announced "the plate is
+clear" while the crowd-gate card next to it showed four rejections. Numbers on
+one page must come from one source: the banner now reads the funnel.
+
+---
+
+## 14. The funnel counts what was examined, not what was scored
+
+**The bug.** The launch loop stops examining candidates once the daily
+allowance is gone. The first funnel implementation measured each gate against
+the *scored* total, so a run that scored 597 and examined 9 reported "594 were
+a real brand, real person, or tragedy" — a flattering lie that made the content
+filter look like it was doing enormous work.
+
+**Fix.** `pipeline_stats.examined` records how many were actually looked at.
+Gate 5 reads "2 of 9 looked at", and gate 4 says plainly "588 never got looked
+at — the allowance ran out first".
+
+**The general rule.** A funnel that attributes unexamined items to a rejection
+reason is not a funnel, it is marketing.

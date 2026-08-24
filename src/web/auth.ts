@@ -20,7 +20,7 @@ import { log } from "../util/log.ts";
 
 const SESSION_TTL_MS = 12 * 3600_000;
 const SCRYPT_KEYLEN = 64;
-const COOKIE_NAME = "trendbot_admin";
+const COOKIE_NAME = "cashcow_admin";
 
 // Login throttling. In-memory is adequate: a restart clears it, and the bot is
 // a single long-lived process.

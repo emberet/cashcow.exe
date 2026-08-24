@@ -371,6 +371,13 @@ export const configSchema = z.object({
     pushIntervalSeconds: z.number().positive().default(3),
     /** Set true when running behind an HTTPS reverse proxy, so cookies get Secure. */
     behindTlsProxy: z.boolean().default(false),
+    /**
+     * How long a rejected candidate is held back before the PUBLIC page shows
+     * it. A live rejection feed still reveals what the bot is looking at right
+     * now; delayed, it is an honest record instead of a tip sheet. The admin
+     * portal is unaffected.
+     */
+    declineDelayHours: z.number().nonnegative().default(6),
   }).default({}),
   storage: z.object({
     dbPath: z.string().default("data/bot.db"),

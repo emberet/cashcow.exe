@@ -1,6 +1,6 @@
 # CLAUDE.md — working in this repo
 
-TrendBot detects breaking trends across ten sources, mints the best ones as
+cashcow.exe detects breaking trends across ten sources, mints the best ones as
 tokens on pump.fun, takes a small rule-bounded dev position, and earns primarily
 through creator fees. TypeScript on Node 26 (native type stripping — there is no
 build step), `node:sqlite`, official `@pump-fun/pump-sdk`.
@@ -107,7 +107,7 @@ budget → *then* the model call, image render, and IPFS pin.
 - **`node:sqlite` returns null-prototype objects.** Fine to read, surprising to
   spread.
 - **Migrations are append-only** in `src/util/db.ts`. Never edit an existing one;
-  add the next. Currently at v4.
+  add the next. Currently at v5.
 - **pump.fun's frontend endpoints are not a documented API.** `frontend-api-v3`
   works and `frontend-api` returns 530. They can change without notice —
   DexScreener is wired as a structurally different fallback.
@@ -121,6 +121,12 @@ budget → *then* the model call, image render, and IPFS pin.
   styles, so there is no way around it) — keep `script-src` strict.
 - **`[hidden]` needs `!important`** in `styles.css`; any class setting an explicit
   `display` beats the UA rule and the element stays visible.
+- **Do not name a CSS class `panel` for anything but a tab panel.** `.panel` sets
+  `display: none`, and reusing it for card headings silently hid every heading on
+  both pages. Card headings are `h4.cardtitle`.
+- **Fonts are self-hosted** in `public/fonts` (Bagel Fat One, Baloo 2, latin
+  subset, ~55KB). Do not swap them for a Google Fonts link — `font-src 'self'`
+  would block it, and the dashboard should work with no network.
 
 ---
 

@@ -31,7 +31,7 @@ const envPath = resolve(PROJECT_ROOT, ".env");
 if (existsSync(envPath)) process.loadEnvFile(envPath);
 
 const HELP = `
-trendbot -- trend detection to pump.fun launcher
+cashcow.exe -- trend detection to pump.fun launcher
 
   feeds [--feed <id>]   Poll feeds once and report what each returned
   score                 Poll, ingest, and print ranked launch candidates

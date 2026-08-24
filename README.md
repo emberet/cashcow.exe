@@ -1,4 +1,4 @@
-# trendbot
+# cashcow.exe
 
 Detects breaking trends, mints them as tokens on pump.fun, takes a small
 rule-bounded dev position, and earns primarily through pump.fun **creator fees**.
@@ -55,6 +55,10 @@ npm run web                   # dashboard only (reads the same database)
 node src/cli.ts run --web     # bot + dashboard in one process
 ```
 
+The UI is a neo-brutalist cartoon: hard ink borders, solid offset shadows, a cow
+that chews. Fonts (Bagel Fat One, Baloo 2) are **self-hosted** in
+`src/web/public/fonts` so the strict CSP holds and the dashboard works offline.
+
 Two surfaces on one port, with a hard boundary between them:
 
 | | |
@@ -67,6 +71,14 @@ Three design decisions worth knowing:
 **The pre-launch candidate queue is admin-only.** A public page streaming "about
 to launch X" in real time is an invitation to be front-run by anyone watching
 it. The public page shows launches only after they exist on chain.
+
+**The gate funnel is the headline.** "The chomp pipeline" shows where every
+rumour died — sniffed, deduped, warmed, scored, screened, crowded out, priced
+out, launched. Aggregate counts publish live; the *named* rejection list is held
+back by `web.declineDelayHours` (default 6), so reading the page can never
+front-run a launch. Gate counts are measured against what was actually
+**examined**, not what was scored — the loop stops looking once the allowance is
+gone, and reporting the remainder as rejections would flatter the filters.
 
 **The web process never holds your wallet key.** Pause/resume works through the
 filesystem kill switch. Anything that spends SOL — force-sell, claim fees — is

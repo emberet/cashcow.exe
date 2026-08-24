@@ -217,6 +217,134 @@ export function feedAttribution(db: Db, cfg: Config) {
 }
 
 /**
+ * The gate funnel over the window: how many rumours came in, and where each
+ * one died. Summed across ticks, so it reads as "today's attrition".
+ */
+export function pipelineFunnel(db: Db, cfg: Config, hours = 24) {
+  const r = db.prepare(
+    `SELECT COALESCE(SUM(sniffed),0) sniffed, COALESCE(SUM(phrases),0) phrases,
+            COALESCE(MAX(terms),0) terms, COALESCE(MAX(warm),0) warm,
+            COALESCE(SUM(scored),0) scored, COALESCE(SUM(examined),0) examined,
+            COALESCE(SUM(clean),0) clean,
+            COALESCE(SUM(uncrowded),0) uncrowded, COALESCE(SUM(affordable),0) affordable,
+            COALESCE(SUM(launched),0) launched, COUNT(*) ticks
+       FROM pipeline_stats WHERE dry_run = ? AND ts > ?`,
+  ).get(mode(cfg), Date.now() - hours * HOUR) as Record<string, number>;
+
+  const activeFeeds = feedHealth(db, cfg).filter((f) => f.enabled && f.signalsLastHour > 0).length;
+  const totalFeeds = Object.values(cfg.feeds).filter((f) => f.enabled).length;
+
+  // Drop lines are phrased as what was LOST at each gate, which is the number
+  // that actually explains where the day went.
+  const unexamined = Math.max(0, (r.scored ?? 0) - (r.examined ?? 0));
+  // Aggregate count only -- no terms, so this is safe to publish live even
+  // though the decline LIST is held back.
+  const crowdedOut = Math.max(0, (r.clean ?? 0) - (r.uncrowded ?? 0));
+
+  return {
+    ticks: r.ticks ?? 0,
+    examined: r.examined ?? 0,
+    unexamined,
+    crowdedOut,
+    gates: [
+      { idx: 1, label: "Sniffed", pass: r.sniffed ?? 0, unit: "rumours",
+        drop: `${activeFeeds} of ${totalFeeds} noses reporting` },
+      { idx: 2, label: "Different topics", pass: r.phrases ?? 0, unit: "phrases",
+        drop: "chopped into comparable key phrases" },
+      { idx: 3, label: "Seen enough", pass: r.warm ?? 0, unit: "warm",
+        drop: `spotted fewer than ${cfg.scoring.minObservations} times = ignored` },
+      { idx: 4, label: `Score over ${Math.round(cfg.scoring.threshold)}`, pass: r.scored ?? 0, unit: "tasty",
+        drop: unexamined > 0
+          ? `${unexamined} never got looked at — the allowance ran out first`
+          : "too slow, too crowded a source, or too quiet" },
+      // Measured against `examined`, not `scored`: the loop stops looking once
+      // the allowance is gone, and reporting the unexamined remainder as
+      // rejections would be a flattering lie.
+      { idx: 5, label: "Not naughty", pass: r.clean ?? 0, unit: "clean",
+        drop: `${Math.max(0, (r.examined ?? 0) - (r.clean ?? 0))} of ${r.examined ?? 0} looked at were a real brand, person, or tragedy` },
+      { idx: 6, label: "Nobody there first", pass: r.uncrowded ?? 0, unit: "uncrowded", jam: true,
+        drop: `${Math.max(0, (r.clean ?? 0) - (r.uncrowded ?? 0))} already minted by someone else. This is the gate that hurts.` },
+      { idx: 7, label: "Can afford it", pass: r.affordable ?? 0, unit: "in budget",
+        drop: `${Math.max(0, (r.uncrowded ?? 0) - (r.affordable ?? 0))} hit the daily allowance` },
+      { idx: 8, label: "Burped a coin", pass: r.launched ?? 0, unit: "coins", win: true,
+        drop: `${Math.max(0, (r.affordable ?? 0) - (r.launched ?? 0))} flopped on chain` },
+    ],
+  };
+}
+
+const DECLINE_LABEL: Record<string, { text: string; tone: string }> = {
+  crowded: { text: "SOMEONE GOT THERE FIRST", tone: "pink" },
+  trademark: { text: "REAL BRAND OR PERSON", tone: "sun" },
+  tragedy: { text: "TRAGEDY", tone: "sun" },
+  slur: { text: "FOUL LANGUAGE", tone: "sun" },
+  operator: { text: "ON YOUR BLOCKLIST", tone: "sun" },
+  budget: { text: "ALLOWANCE GONE", tone: "milk" },
+  brand: { text: "REAL BRAND", tone: "sun" },
+  person: { text: "REAL PERSON", tone: "sun" },
+};
+
+/**
+ * Recently declined candidates.
+ *
+ * `delayHours` exists because a live rejection feed still leaks what the bot is
+ * looking at right now. Delayed, it becomes an honest record of judgement
+ * rather than a tip sheet. Admin passes 0; the public page does not.
+ */
+export function recentDeclines(db: Db, cfg: Config, delayHours: number, limit = 8) {
+  const rows = db.prepare(
+    `SELECT term, reason, detail, score, ts FROM declined
+      WHERE dry_run = ? AND ts < ?
+      ORDER BY ts DESC LIMIT ?`,
+  ).all(mode(cfg), Date.now() - delayHours * HOUR, limit) as Array<Record<string, unknown>>;
+
+  return rows.map((r) => {
+    const reason = String(r.reason);
+    const meta = DECLINE_LABEL[reason] ?? { text: reason.toUpperCase(), tone: "milk" };
+    return {
+      term: String(r.term),
+      reason: meta.text,
+      tone: meta.tone,
+      detail: String(r.detail ?? ""),
+      score: Number(r.score ?? 0),
+      ts: Number(r.ts),
+    };
+  });
+}
+
+/** Fee claims. Measured, not estimated -- the honest counterpart to per-token splits. */
+export function feeClaims(db: Db, cfg: Config, limit = 6) {
+  const rows = db.prepare(
+    `SELECT ts, sol_amount, signature FROM fee_claims
+      WHERE dry_run = ? ORDER BY ts DESC LIMIT ?`,
+  ).all(mode(cfg), limit) as Array<Record<string, unknown>>;
+
+  return rows.map((r) => {
+    const ts = Number(r.ts);
+    // How many launches existed when the claim landed: the bulk claim covered them.
+    const tokens = (db.prepare(
+      `SELECT COUNT(*) n FROM launches WHERE dry_run = ? AND created_at < ?`,
+    ).get(mode(cfg), ts) as { n: number }).n;
+    return {
+      ts,
+      sol: Number(r.sol_amount ?? 0),
+      tokens,
+      signature: r.signature ? String(r.signature) : null,
+    };
+  });
+}
+
+/** Seconds until the soonest feed is next due, for the countdown chip. */
+export function nextPollSeconds(db: Db, cfg: Config): number {
+  const row = db.prepare(`SELECT MAX(ingested_at) last FROM signals`).get() as { last: number | null };
+  if (!row.last) return 0;
+  const soonest = Math.min(
+    ...Object.values(cfg.feeds).filter((f) => f.enabled).map((f) => f.pollSeconds),
+  );
+  const due = row.last + soonest * 1000;
+  return Math.max(0, Math.round((due - Date.now()) / 1000));
+}
+
+/**
  * Everything the public page may see.
  *
  * Deliberately excludes: the candidate queue, wallet balance and address,
@@ -229,6 +357,16 @@ export function publicSnapshot(db: Db, cfg: Config, kill: KillSwitch) {
     network: cfg.network,
     dryRun: cfg.dryRun,
     stats: headlineStats(db, cfg),
+    funnel: pipelineFunnel(db, cfg),
+    // Public sees declines only after a delay -- see recentDeclines().
+    declines: recentDeclines(db, cfg, cfg.web.declineDelayHours),
+    declineDelayHours: cfg.web.declineDelayHours,
+    claims: feeClaims(db, cfg),
+    nextPollSeconds: nextPollSeconds(db, cfg),
+    launchesToday: headlineStats(db, cfg).launches24h,
+    // Runway is a wallet fact, so it is only known in live mode.
+    capacityRunwayDays: cfg.risk.adaptive.enabled && !cfg.dryRun
+      ? `${cfg.risk.adaptive.minRunwayDays}d` : null,
     launches: recentLaunches(db, cfg, 24),
     feeds: feedHealth(db, cfg).map(({ id, enabled, signalsLastHour, lastSeen, healthy }) => ({
       id, enabled, signalsLastHour, lastSeen, healthy,
@@ -375,6 +513,11 @@ export function adminSnapshot(db: Db, cfg: Config, kill: KillSwitch, walletBalan
       requiredMinutes: cfg.scoring.warmupMinutes,
     },
     stats: headlineStats(db, cfg),
+    funnel: pipelineFunnel(db, cfg),
+    // Admin sees declines immediately; there is nothing to front-run yourself.
+    declines: recentDeclines(db, cfg, 0, 12),
+    claims: feeClaims(db, cfg),
+    nextPollSeconds: nextPollSeconds(db, cfg),
     positions: openPositions(db, cfg),
     candidates: candidateQueue(db, cfg),
     feeds: feedHealth(db, cfg),
