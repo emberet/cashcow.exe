@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import type { Db } from "../util/db.ts";
 import type { Config } from "../config/schema.ts";
 import { KillSwitch } from "../risk/killswitch.ts";
-import { publicSnapshot, adminSnapshot } from "./queries.ts";
+import { publicSnapshot, adminSnapshot, refreshWallet } from "./queries.ts";
 import {
   authState, login, logout, validateSession, readCookie, cookieHeader,
   clearCookieHeader, csrfToken, checkCsrf, auditAction, sessionCount, revokeAllSessions,
@@ -62,6 +62,9 @@ export function startWebServer(db: Db, cfg: Config, kill: KillSwitch): Promise<W
   // Push loop: read state, diff, send only on change.
   const timer = setInterval(() => {
     if (!clients.size) return;
+    // Fire and forget: keeps the cached balance warm without making the push
+    // loop async. Its own TTL stops this hammering the RPC.
+    void refreshWallet(cfg).catch(() => {});
     try {
       const pub = JSON.stringify(publicSnapshot(db, cfg, kill));
       const pubHash = hash(pub);
@@ -174,6 +177,7 @@ async function handle(
   // ---------------------------------------------------------------- public
   if (path === "/api/public") {
     if (!cfg.web.publicEnabled) return sendJson(res, 404, { error: "public dashboard disabled" });
+    if (cfg.web.showWallet) await refreshWallet(cfg).catch(() => {});
     return sendJson(res, 200, publicSnapshot(db, cfg, kill));
   }
 
@@ -189,6 +193,7 @@ async function handle(
     if (!isAdmin) return sendJson(res, 401, { error: "not authenticated" });
 
     if (path === "/api/admin/snapshot") {
+      await refreshWallet(cfg).catch(() => {});
       return sendJson(res, 200, adminSnapshot(db, cfg, kill, await walletBalance(cfg)));
     }
 

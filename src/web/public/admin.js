@@ -206,6 +206,17 @@ function render(d) {
     ? `<div class="banner pink mb-m"><span class="cap">COW STOPPED.</span> ${esc(d.haltReason || "")} — open positions still follow their exit rules.</div>`
     : (d.dryRun ? `<div class="banner sun mb-m"><span class="cap">PLAY MONEY.</span> The whole pipeline runs, but no transaction is ever signed.</div>` : "");
 
+  // --- wallet (admin always sees it)
+  const w = d.wallet;
+  $("a-purse").innerHTML = w && w.address
+    ? `<div class="label">Purse · ${esc(w.network)}</div>
+       <div class="bal">${esc(sol(w.balanceSol))} SOL</div>
+       <div class="addr">
+         <a href="${esc(w.explorerUrl)}" target="_blank" rel="noopener noreferrer"
+            title="${esc(w.address)}">${esc(w.address.slice(0, 8))}…${esc(w.address.slice(-8))}</a>
+       </div>`
+    : `<div class="label">Purse</div><div class="addr">no wallet configured</div>`;
+
   // --- badges
   const badges = {
     now: d.halted ? "off" : "live",

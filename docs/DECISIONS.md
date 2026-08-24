@@ -357,3 +357,30 @@ The next launch reconciled to **zero drift at nine decimal places**.
 `CLAUDE.md` says that if the ledger and the wallet disagree, the budget rail has
 a hole and everything stops. That check is only usable if the ledger is exact
 when nothing is wrong; a permanent small drift would train you to ignore it.
+
+
+---
+
+## 20. The wallet address and balance are published by default
+
+**Decision.** The public page shows the dev wallet's address and balance, with a
+link to an explorer. `web.showWallet` turns it off; the admin portal ignores that
+flag and always shows it.
+
+**Reasoning.** Both facts are already public. The page lists the mint of every
+token it created, and a pump.fun token names its creator on chain — so the
+address is one lookup away, and the balance follows from the address. Withholding
+them would not conceal anything from a determined reader; it would only make
+honest verification harder, on a page whose entire credibility rests on showing
+its own duds.
+
+**The real cost, stated plainly.** Publishing does make *casual* tracking
+trivial rather than merely possible, and it advertises capacity to anyone
+running a competing bot. That is a genuine competitive cost, distinct from
+privacy, which is why the flag exists. But the launches themselves are already
+listed, so the marginal disclosure is small.
+
+**Implementation note.** `configuredWalletAddress()` returns null when no wallet
+is configured, because `loadWallet` invents an ephemeral throwaway keypair in dry
+run. Publishing that would be worse than publishing nothing: it looks like a real
+wallet and changes on every restart.

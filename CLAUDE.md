@@ -53,7 +53,12 @@ understanding what it was protecting against.
    Startup refuses otherwise. The static blocklist demonstrably leaks (see
    findings). Override exists (`filters.allowUnscreenedLive`) but is off.
 
-9. **Secrets never reach logs, the database, or the dashboard.** The logger
+9. **The wallet address and balance are published; the SECRET never is.** Both
+   are already public on-chain, so the dashboard shows them (`web.showWallet`
+   opts out of the public page only). The private key is a different matter
+   entirely — see below.
+
+10. **Secrets never reach logs, the database, or the dashboard.** The logger
    redacts on key name; `redactedConfig()` omits the RPC endpoint entirely because
    API keys live in those URLs.
 

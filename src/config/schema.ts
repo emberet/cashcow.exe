@@ -389,6 +389,19 @@ export const configSchema = z.object({
      * portal is unaffected.
      */
     declineDelayHours: z.number().nonnegative().default(6),
+    /**
+     * Show the dev wallet address and balance on the PUBLIC page.
+     *
+     * On by default, because both are already public: the page lists every mint
+     * it created, and a token's creator (and that creator's balance) is one
+     * lookup away on any explorer. Hiding them would obscure verification
+     * without actually concealing anything.
+     *
+     * Turn it off if you would rather not advertise capacity to competitors —
+     * but understand that determined readers can still derive it. The admin
+     * portal always shows it.
+     */
+    showWallet: z.boolean().default(true),
   }).default({}),
   storage: z.object({
     dbPath: z.string().default("data/bot.db"),

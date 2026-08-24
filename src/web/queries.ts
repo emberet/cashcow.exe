@@ -3,7 +3,10 @@ import { isPretend, type Config } from "../config/schema.ts";
 import { BudgetGuard } from "../risk/budget.ts";
 import { KillSwitch } from "../risk/killswitch.ts";
 import { buildCandidates, checkWarmup, historySpanMinutes } from "../scoring/score.ts";
+import { PublicKey } from "@solana/web3.js";
 import { computeCapacity } from "../risk/capacity.ts";
+import { configuredWalletAddress } from "../chain/wallet.ts";
+import { getBalanceSol } from "../chain/rpc.ts";
 import { outcomeSummary, settledOutcomes } from "../learning/outcomes.ts";
 import { tuningHistory } from "../learning/tuner.ts";
 import { overlaySummary } from "../learning/overlay.ts";
@@ -333,6 +336,54 @@ export function feeClaims(db: Db, cfg: Config, limit = 6) {
   });
 }
 
+/**
+ * Dev wallet address and balance.
+ *
+ * Balance is cached: the SSE loop pushes every few seconds and an RPC round trip
+ * per push would be wasteful and rate-limited. Fifteen seconds of staleness on a
+ * displayed balance costs nothing.
+ */
+let walletCache: { at: number; sol: number | null } = { at: 0, sol: null };
+const WALLET_TTL_MS = 15_000;
+
+export type WalletView = {
+  address: string | null;
+  balanceSol: number | null;
+  explorerUrl: string | null;
+  network: string;
+};
+
+/**
+ * Refresh the cached balance. Async, so the caller decides when to pay for it;
+ * the snapshot readers stay synchronous and never block the SSE push loop.
+ */
+export async function refreshWallet(cfg: Config): Promise<void> {
+  const address = configuredWalletAddress(cfg);
+  if (!address) return;
+  if (Date.now() - walletCache.at < WALLET_TTL_MS) return;
+  try {
+    walletCache = { at: Date.now(), sol: await getBalanceSol(cfg, new PublicKey(address)) };
+  } catch {
+    // Keep the last known figure rather than flashing a zero on an RPC blip.
+    walletCache = { at: Date.now(), sol: walletCache.sol };
+  }
+}
+
+/** Synchronous read of whatever `refreshWallet` last fetched. */
+export function walletView(cfg: Config): WalletView {
+  const address = configuredWalletAddress(cfg);
+  if (!address) {
+    return { address: null, balanceSol: null, explorerUrl: null, network: cfg.network };
+  }
+  const cluster = cfg.network === "mainnet-beta" ? "" : `?cluster=${cfg.network}`;
+  return {
+    address,
+    balanceSol: walletCache.sol,
+    explorerUrl: `https://solscan.io/account/${address}${cluster}`,
+    network: cfg.network,
+  };
+}
+
 /** Seconds until the soonest feed is next due, for the countdown chip. */
 export function nextPollSeconds(db: Db, cfg: Config): number {
   const row = db.prepare(`SELECT MAX(ingested_at) last FROM signals`).get() as { last: number | null };
@@ -364,6 +415,9 @@ export function publicSnapshot(db: Db, cfg: Config, kill: KillSwitch) {
     claims: feeClaims(db, cfg),
     nextPollSeconds: nextPollSeconds(db, cfg),
     launchesToday: headlineStats(db, cfg).launches24h,
+    // Address and balance are already public on-chain; `web.showWallet` exists
+    // so the operator can decline to advertise capacity anyway.
+    wallet: cfg.web.showWallet ? walletView(cfg) : null,
     // Runway is a wallet fact, so it is only known in live mode.
     capacityRunwayDays: cfg.risk.adaptive.enabled && !cfg.dryRun
       ? `${cfg.risk.adaptive.minRunwayDays}d` : null,
@@ -479,6 +533,8 @@ export function adminSnapshot(db: Db, cfg: Config, kill: KillSwitch, walletBalan
 
   return {
     capacity,
+    // Admin always sees it, regardless of the public toggle.
+    wallet: walletView(cfg),
     outcomes: outcomeSummary(db, cfg),
     recentOutcomes: settledOutcomes(db, cfg, 15).map((o) => ({
       term: o.term, symbol: o.symbol, score: o.score, verdict: o.verdict,

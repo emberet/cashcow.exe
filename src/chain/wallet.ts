@@ -92,6 +92,25 @@ export function walletPubkey(cfg: Config): string {
   return loadWallet(cfg).publicKey.toBase58();
 }
 
+/**
+ * The address only when a real wallet is configured.
+ *
+ * `loadWallet` invents an ephemeral throwaway keypair in dry run so the pipeline
+ * can be exercised with no setup. Publishing that address would be worse than
+ * publishing nothing -- it looks like a real wallet, and it changes on every
+ * restart. Returns null instead.
+ */
+export function configuredWalletAddress(cfg: Config): string | null {
+  const hasSecret = Boolean(process.env[cfg.wallet.secretEnv]);
+  const hasFile = Boolean(cfg.wallet.keypairPath);
+  if (!hasSecret && !hasFile) return null;
+  try {
+    return loadWallet(cfg).publicKey.toBase58();
+  } catch {
+    return null;
+  }
+}
+
 export function __resetWalletCache(): void {
   cached = undefined;
 }

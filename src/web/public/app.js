@@ -223,6 +223,46 @@ function render(d) {
       <div class="note" style="margin-top:4px">${esc(note)}</div>
     </div>`).join("");
 
+  // --- the purse
+  const w = d.wallet;
+  const purseCard = $("purse-card");
+  if (w && w.address) {
+    purseCard.hidden = false;
+    const short = `${w.address.slice(0, 6)}…${w.address.slice(-6)}`;
+    $("purse").innerHTML = `
+      <div class="dashrow" style="grid-template-columns:1fr auto">
+        <span class="label">Balance</span>
+        <span class="num deep" style="font-family:var(--display);font-size:32px">${esc(sol(w.balanceSol))} SOL</span>
+      </div>
+      <div class="dashrow" style="grid-template-columns:1fr auto">
+        <span class="label">Address</span>
+        <span>
+          <a href="${esc(w.explorerUrl)}" target="_blank" rel="noopener noreferrer"
+             class="num" title="${esc(w.address)}">${esc(short)}</a>
+          <button class="sm" data-copy="${esc(w.address)}" title="Copy full address">COPY</button>
+        </span>
+      </div>
+      <div class="dashrow" style="grid-template-columns:1fr auto">
+        <span class="label">Network</span>
+        <span class="tag ${w.network === "mainnet-beta" ? "pink" : "sky"}">${esc(w.network)}</span>
+      </div>`;
+
+    purseCard.querySelectorAll("[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.copy);
+          const was = btn.textContent;
+          btn.textContent = "COPIED";
+          setTimeout(() => { btn.textContent = was; }, 1500);
+        } catch {
+          btn.textContent = "COPY FAILED";
+        }
+      });
+    });
+  } else {
+    purseCard.hidden = true;
+  }
+
   // --- claims
   $("claims").innerHTML = (d.claims || []).length
     ? d.claims.map((c) => `
