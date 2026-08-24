@@ -262,6 +262,14 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_declined_ts ON declined(ts, dry_run);
   CREATE INDEX idx_declined_norm ON declined(norm, ts);
   `,
+
+  // v6 -- keep the original source text
+  `
+  -- The term column holds the extracted key PHRASE, which is what scoring needs
+  -- but is a poor thing to show a reader: "Former Illinois" instead of the
+  -- headline it came from. Keep the source's own text alongside it for display.
+  ALTER TABLE signals ADD COLUMN source_text TEXT;
+  `,
 ];
 
 export function openDb(dbPath: string): Db {

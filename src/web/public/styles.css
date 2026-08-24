@@ -617,3 +617,44 @@ a.gate:hover .gate-more, a.gate:focus-visible .gate-more { opacity: .75; }
   line-height: 1.05;
   margin-top: 2px;
 }
+
+/* ------------------------------------------------------- what it is reading */
+
+.readrow {
+  display: grid;
+  grid-template-columns: 190px 1fr 60px;
+  gap: 0 14px;
+  align-items: baseline;
+  padding: 10px 0;
+  border-bottom: 3px dashed var(--dash);
+}
+.readrow:last-of-type { border-bottom: none; }
+
+.readrow .src { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.src-name {
+  font-family: var(--display);
+  font-size: 13.5px;
+  color: var(--deep);
+  white-space: nowrap;
+}
+.src-pub {
+  font-weight: 700; font-size: 11.5px;
+  letter-spacing: .04em; text-transform: uppercase;
+  color: var(--grey);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.read-link {
+  font-weight: 600; font-size: 15.5px;
+  color: var(--ink);
+  border-bottom: 2px solid var(--leaf);
+}
+.read-link:hover { color: var(--deep); border-bottom-color: var(--pink); }
+
+.read-age { text-align: right; font-size: 12.5px; }
+
+@media (max-width: 700px) {
+  .readrow { grid-template-columns: 1fr auto; }
+  .readrow .src { grid-column: 1 / -1; flex-direction: row; gap: 8px; align-items: baseline; }
+  .read-age { text-align: right; }
+}

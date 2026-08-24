@@ -231,6 +231,22 @@ function render(d) {
       <div class="note" style="margin-top:4px">${esc(note)}</div>
     </div>`).join("");
 
+  // --- what it's reading
+  const reading = d.reading || [];
+  $("reading-count").textContent = reading.length ? `${reading.length} ITEMS` : "LIVE";
+  $("reading").innerHTML = reading.length
+    ? reading.map((r) => `
+        <div class="readrow">
+          <span class="src">
+            <span class="src-name">${esc(r.source)}</span>
+            ${r.publisher ? `<span class="src-pub">${esc(r.publisher)}</span>` : ""}
+          </span>
+          <a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer nofollow"
+             class="read-link">${esc(r.text)}</a>
+          <span class="grey num read-age">${esc(ago(r.at))}</span>
+        </div>`).join("")
+    : `<div class="empty">Nothing read yet. Give the noses a minute.</div>`;
+
   // --- the purse
   const w = d.wallet;
   const purseCard = $("purse-card");
@@ -371,6 +387,18 @@ function renderGateDetail() {
         <div class="label" style="margin:-4px 0 4px 0">${esc(b.note || "")}</div>`).join("")}
     </div>` : "";
 
+  const links = (g.links || []).length ? `
+    <div style="margin-top:18px">
+      <div class="label" style="margin-bottom:8px">A few it just read</div>
+      ${g.links.map((l) => `
+        <div class="readrow">
+          <span class="src"><span class="src-name">${esc(l.source)}</span></span>
+          <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow"
+             class="read-link">${esc(l.text)}</a>
+          <span class="grey num read-age">${esc(ago(l.at))}</span>
+        </div>`).join("")}
+    </div>` : "";
+
   const histo = (g.histogram || []).length ? `
     <div class="stack" style="gap:8px;margin-top:18px">
       ${(() => {
@@ -416,7 +444,7 @@ function renderGateDetail() {
       <p style="font-weight:600;font-size:16.5px;margin:0 0 6px">${esc(g.what)}</p>
       <p class="note" style="margin:0 0 16px">${esc(g.why)}</p>
       <div class="gd-stats">${stats}</div>
-      ${bars}${histo}${rows}
+      ${bars}${links}${histo}${rows}
       ${g.note ? `<p class="note">${esc(g.note)}</p>` : ""}
       ${delayed}
     </div>`;

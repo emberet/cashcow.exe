@@ -6,6 +6,7 @@ import { buildCandidates, checkWarmup, historySpanMinutes } from "../scoring/sco
 import { PublicKey } from "@solana/web3.js";
 import { computeCapacity } from "../risk/capacity.ts";
 import { configuredWalletAddress } from "../chain/wallet.ts";
+import { compileFilters, checkTerm } from "../scoring/filters.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
 import { outcomeSummary, settledOutcomes } from "../learning/outcomes.ts";
 import { tuningHistory } from "../learning/tuner.ts";
@@ -353,6 +354,93 @@ export type WalletView = {
   network: string;
 };
 
+/** Human names for the sources, so the page never shows a config key. */
+export const SOURCE_NAMES: Record<string, string> = {
+  googleTrends: "Google Trends",
+  googleNews: "Google News",
+  hackernews: "Hacker News",
+  wikipedia: "Wikipedia",
+  reddit: "Reddit",
+  fourchan: "4chan /biz/",
+  polymarket: "Polymarket",
+  farcaster: "Farcaster",
+  onchain: "pump.fun",
+  xApi: "X",
+};
+
+/**
+ * What the bot is currently reading, newest first.
+ *
+ * **Chronological and unranked, deliberately.** These are public feeds anyone
+ * can open, so showing them leaks nothing — the edge is in the scoring, not in
+ * knowing that Google News exists. Ordering them by score, though, would
+ * publish exactly which topics are near the launch line, so they are never
+ * sorted by anything but time.
+ *
+ * Filtered on slurs ONLY, not on the full launch filters. Those exist to stop
+ * the bot *minting* a brand or a tragedy, which is a legal question about
+ * issuing a token. A news headline about a company or a disaster is just news,
+ * and stripping it would misrepresent what the bot actually reads.
+ */
+export function readingList(db: Db, cfg: Config, limit = 40) {
+  const rows = db.prepare(
+    `SELECT feed, term, source_text, url, meta, ingested_at, observed_at
+       FROM signals
+      WHERE url IS NOT NULL AND url != '' AND ingested_at > ?
+      ORDER BY ingested_at DESC, observed_at DESC
+      LIMIT ?`,
+  ).all(Date.now() - 6 * HOUR, limit * 6) as Array<Record<string, unknown>>;
+
+  const displayFilters = compileFilters({
+    ...cfg.filters,
+    blockTrademarks: false,
+    blockTragedy: false,
+    blockLikelyPersonNames: false,
+  });
+
+  const seen = new Set<string>();
+  const out: Array<{
+    feed: string; source: string; publisher: string | null;
+    text: string; url: string; at: number;
+  }> = [];
+
+  for (const r of rows) {
+    let meta: Record<string, unknown> = {};
+    try { meta = JSON.parse(String(r.meta ?? "{}")); } catch { /* ignore */ }
+
+    // Prefer the source's own words; fall back to the extracted phrase for rows
+    // written before source_text existed.
+    const headline = typeof meta.headline === "string" && meta.headline.length > 12
+      ? meta.headline
+      : null;
+    const text = String(r.source_text || headline || r.term || "").trim();
+    if (!text || text.length < 4) continue;
+
+    // One entry per link: several phrases are extracted from one article.
+    const key = String(r.url);
+    if (seen.has(key)) continue;
+
+    if (!checkTerm(text, displayFilters).allowed) continue;
+
+    const feed = String(r.feed);
+    seen.add(key);
+    out.push({
+      feed,
+      source: SOURCE_NAMES[feed] ?? feed,
+      publisher:
+        typeof meta.source === "string" && meta.source ? meta.source :
+        typeof meta.subreddit === "string" && meta.subreddit ? `r/${meta.subreddit}` :
+        typeof meta.author === "string" && meta.author ? `@${meta.author}` : null,
+      text: text.slice(0, 150),
+      url: String(r.url),
+      at: Number(r.ingested_at),
+    });
+    if (out.length >= limit) break;
+  }
+
+  return out;
+}
+
 /** Signals per feed over a window, for the gate-1 breakdown. */
 function signalsByFeed(db: Db, hours: number) {
   const rows = db.prepare(
@@ -436,11 +524,12 @@ export function gateDetails(db: Db, cfg: Config, delayHours: number) {
         { label: "Distinct sources reporting", value: byFeed.length },
       ],
       bars: byFeed.map((r) => ({
-        label: r.feed,
+        label: SOURCE_NAMES[r.feed] ?? r.feed,
         n: r.n,
         pct: totalSignals > 0 ? (r.n / totalSignals) * 100 : 0,
         note: `${r.terms} distinct topics`,
       })),
+      links: readingList(db, cfg, 8),
       delayed: false,
     },
     {
@@ -609,6 +698,7 @@ export function publicSnapshot(db: Db, cfg: Config, kill: KillSwitch) {
     declines: recentDeclines(db, cfg, cfg.web.declineDelayHours),
     declineDelayHours: cfg.web.declineDelayHours,
     gateDetails: gateDetails(db, cfg, cfg.web.declineDelayHours),
+    reading: readingList(db, cfg, 24),
     claims: feeClaims(db, cfg),
     nextPollSeconds: nextPollSeconds(db, cfg),
     launchesToday: headlineStats(db, cfg).launches24h,
@@ -771,6 +861,7 @@ export function adminSnapshot(db: Db, cfg: Config, kill: KillSwitch, walletBalan
     declines: recentDeclines(db, cfg, 0, 12),
     // Admin sees the same depth with no delay applied.
     gateDetails: gateDetails(db, cfg, 0),
+    reading: readingList(db, cfg, 24),
     claims: feeClaims(db, cfg),
     nextPollSeconds: nextPollSeconds(db, cfg),
     positions: openPositions(db, cfg),

@@ -112,7 +112,7 @@ budget → *then* the model call, image render, and IPFS pin.
 - **`node:sqlite` returns null-prototype objects.** Fine to read, surprising to
   spread.
 - **Migrations are append-only** in `src/util/db.ts`. Never edit an existing one;
-  add the next. Currently at v5.
+  add the next. Currently at v6.
 - **`launch.simulate` builds the real transaction and simulates it.** Stronger
   evidence than `dryRun`, which never touches the chain. Both book against the
   pretend ledger via `isPretend()` — a simulation must never consume the real
@@ -139,6 +139,13 @@ budget → *then* the model call, image render, and IPFS pin.
   styles, so there is no way around it) — keep `script-src` strict.
 - **`[hidden]` needs `!important`** in `styles.css`; any class setting an explicit
   `display` beats the UA rule and the element stays visible.
+- **`signals.term` is the extracted PHRASE; `signals.source_text` is the
+  source's own words.** Scoring compares phrases; anything shown to a reader
+  should use `source_text`, or it renders fragments like "Former Illinois".
+- **Display filtering is deliberately weaker than launch filtering.** The launch
+  filters reject brands/people/tragedies because minting those is a legal
+  hazard. Reading a headline about them is not. The reading list filters on
+  slurs only — do not "fix" this by applying the full filter set.
 - **Do not name a CSS class `panel` for anything but a tab panel.** `.panel` sets
   `display: none`, and reusing it for card headings silently hid every heading on
   both pages. Card headings are `h4.cardtitle`.

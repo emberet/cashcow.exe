@@ -39,8 +39,8 @@ export type Candidate = {
 /** Persist observations, expanding long text into comparable key phrases. */
 export function ingestSignals(db: Db, signals: RawSignal[], feedWeights: Map<string, number>): number {
   const stmt = db.prepare(
-    `INSERT INTO signals (feed, term, norm, raw_score, observed_at, ingested_at, url, meta)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO signals (feed, term, norm, raw_score, observed_at, ingested_at, url, meta, source_text)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // One clock for the whole batch, so a slow insert loop cannot smear a single
   // poll across a window boundary.
@@ -61,6 +61,8 @@ export function ingestSignals(db: Db, signals: RawSignal[], feedWeights: Map<str
           now,
           s.url ?? null,
           s.meta ? JSON.stringify(s.meta) : null,
+          // The source's own words, for display. `term` is the extracted phrase.
+          s.term.slice(0, 300),
         );
         inserted++;
       }

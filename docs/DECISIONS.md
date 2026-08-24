@@ -413,3 +413,35 @@ has aged past the 6-hour delay yet". A blank panel would read as broken.
 panel's own heading underneath it. Fixed with `scroll-margin-top` plus
 `block: "start"`; `block: "nearest"` looked correct in the DOM and wrong on
 screen.
+
+
+---
+
+## 22. Publish what it reads, chronologically, with every source named
+
+**Decision.** A live "what the cow is reading" list on the public page: source
+name, publisher where known, the source's own headline, and a link to the
+original. Also surfaced inside the gate-1 panel.
+
+**Why this leaks nothing.** These are public feeds — Google News, Hacker News,
+Wikipedia, /biz/ — that anyone can open. The edge was never in knowing which
+sources exist; it is in the scoring and the saturation check. What *would* leak
+is the ranking, so the list is ordered by time and never by score. Sorting it
+would publish exactly which topics sit near the launch line.
+
+**Two things this required.**
+
+*Keeping the source's own words.* Signals stored only the extracted key phrase,
+because that is what scoring compares. A reading list built from those showed
+"Former Illinois" and "drummer" instead of headlines. Migration v6 adds
+`source_text` so display gets the original and scoring keeps the phrase.
+
+*A different filter for display than for launching.* The launch filters reject
+brands, people and tragedies, because those are legal hazards when you MINT a
+token about them. A news headline about a company or a disaster is just news.
+Filtering the reading list through the launch rules would have misrepresented
+what the bot actually reads, so display is filtered on slurs and the operator
+blocklist only.
+
+**Links are `noopener noreferrer nofollow` and open in a new tab**, since every
+one of them is attacker-controlled text from a third-party feed.
