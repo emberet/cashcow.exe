@@ -1,0 +1,158 @@
+import { test, describe, beforeEach } from "node:test";
+import assert from "node:assert/strict";
+
+import { configSchema } from "../src/config/schema.ts";
+import { openMemoryDb, type Db } from "../src/util/db.ts";
+import { profitSummary } from "../src/web/queries.ts";
+import { recordDistributionSnapshot, listDistributions } from "../src/accounting/distribution.ts";
+
+const cfg = (over: Record<string, unknown> = {}) => configSchema.parse({ dryRun: false, ...over });
+
+// ==================================================================
+// Net profit must not double-count. dev_buy/dev_sell spend_ledger rows are
+// already netted inside positions.realized_pnl_sol; summing them again on
+// top would silently understate profit.
+// ==================================================================
+
+describe("profitSummary — no double-counting", () => {
+  let db: Db;
+  beforeEach(() => { db = openMemoryDb(); });
+
+  function seedClosedPosition(entrySol: number, exitSol: number) {
+    db.prepare(
+      `INSERT INTO positions (mint, symbol, entry_sol, entry_tokens, entry_price, status,
+                               exit_sol, realized_pnl_sol, opened_at, closed_at, dry_run)
+       VALUES ('m1', 'SYM', ?, 1000, ?, 'closed', ?, ?, ?, ?, 0)`,
+    ).run(entrySol, entrySol / 1000, exitSol, exitSol - entrySol, Date.now(), Date.now());
+  }
+
+  function seedLedger(kind: string, solDelta: number) {
+    db.prepare(
+      `INSERT INTO spend_ledger (ts, kind, sol_delta, dry_run) VALUES (?, ?, ?, 0)`,
+    ).run(Date.now(), kind, solDelta);
+  }
+
+  function seedFeeClaim(sol: number) {
+    db.prepare(
+      `INSERT INTO fee_claims (ts, sol_amount, dry_run) VALUES (?, ?, 0)`,
+    ).run(Date.now(), sol);
+  }
+
+  test("fee claim + realized P&L + launch spend, and nothing else", () => {
+    seedClosedPosition(0.05, 0.15); // realized_pnl_sol = 0.10
+    seedLedger("dev_buy", -0.05);
+    seedLedger("dev_sell", 0.15);
+    seedLedger("launch", -0.025);
+    seedFeeClaim(0.02);
+
+    const p = profitSummary(db, cfg());
+    // 0.02 (fees) + 0.10 (realized pnl) - 0.025 (launch) = 0.095
+    assert.ok(Math.abs(p.netProfitSol - 0.095) < 1e-9, `got ${p.netProfitSol}`);
+    // Specifically: the dev_buy/dev_sell ledger rows must NOT be subtracted again.
+    assert.ok(Math.abs(p.netProfitSol - (0.02 + 0.10 - 0.025)) < 1e-9);
+  });
+
+  test("an open position's dev_buy spend does not reduce net profit", () => {
+    db.prepare(
+      `INSERT INTO positions (mint, symbol, entry_sol, entry_tokens, entry_price, status, opened_at, dry_run)
+       VALUES ('m2', 'SYM', 0.05, 1000, 0.00005, 'open', ?, 0)`,
+    ).run(Date.now());
+    seedLedger("dev_buy", -0.05);
+
+    const p = profitSummary(db, cfg());
+    assert.equal(p.netProfitSol, 0, "open positions' locked-up capital is not a loss");
+  });
+
+  test("dry_run and live rows never mix", () => {
+    seedFeeClaim(1); // live (dry_run=0 from the helper)
+    db.prepare(
+      `INSERT INTO fee_claims (ts, sol_amount, dry_run) VALUES (?, ?, 1)`,
+    ).run(Date.now(), 999); // dry-run, must not leak into the live figure
+
+    const live = profitSummary(db, cfg({ dryRun: false }));
+    assert.equal(live.feesTotalSol, 1);
+
+    const pretend = profitSummary(db, cfg({ dryRun: true }));
+    assert.equal(pretend.feesTotalSol, 999);
+  });
+
+  test("an empty ledger nets to exactly zero, not NaN or undefined", () => {
+    const p = profitSummary(db, cfg());
+    assert.equal(p.netProfitSol, 0);
+  });
+});
+
+// ==================================================================
+// The distribution ledger is calculated figures only, and inert by default.
+// ==================================================================
+
+describe("distribution ledger", () => {
+  let db: Db;
+  beforeEach(() => { db = openMemoryDb(); });
+
+  test("splits sum to netProfitSol and match configured percentages", () => {
+    const c = cfg({
+      distribution: {
+        enabled: true,
+        splits: [
+          { label: "token holders (future)", pct: 40 },
+          { label: "operator", pct: 50 },
+          { label: "weekly raffle", pct: 10 },
+        ],
+      },
+    });
+    const snap = recordDistributionSnapshot(db, c, 10);
+    const total = snap.splits.reduce((s, x) => s + x.sol, 0);
+    assert.ok(Math.abs(total - 10) < 1e-9, `splits summed to ${total}, expected 10`);
+
+    const byLabel = new Map(snap.splits.map((s) => [s.label, s.sol]));
+    assert.ok(Math.abs((byLabel.get("token holders (future)") ?? 0) - 4) < 1e-9);
+    assert.ok(Math.abs((byLabel.get("operator") ?? 0) - 5) < 1e-9);
+    assert.ok(Math.abs((byLabel.get("weekly raffle") ?? 0) - 1) < 1e-9);
+  });
+
+  test("disabled by default", () => {
+    assert.equal(cfg().distribution.enabled, false);
+  });
+
+  test("consecutive snapshots chain period_start to the previous period_end", () => {
+    const c = cfg({ distribution: { enabled: true } });
+    const first = recordDistributionSnapshot(db, c, 5);
+    const second = recordDistributionSnapshot(db, c, 3);
+    assert.equal(second.periodStart, first.periodEnd);
+  });
+
+  test("listDistributions returns newest first", () => {
+    const c = cfg({ distribution: { enabled: true } });
+    recordDistributionSnapshot(db, c, 1);
+    recordDistributionSnapshot(db, c, 2);
+    const rows = listDistributions(db);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]!.netProfitSol, 2);
+    assert.equal(rows[1]!.netProfitSol, 1);
+  });
+});
+
+// ==================================================================
+// Migration additivity: v7 must not disturb v1-v6.
+// ==================================================================
+
+describe("migration v7 is purely additive", () => {
+  test("a fresh database lands at user_version 7 with earlier tables intact", () => {
+    const db = openMemoryDb();
+    const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+    assert.equal(version, 7);
+
+    const tables = new Set(
+      (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>)
+        .map((r) => r.name),
+    );
+    for (const t of [
+      "signals", "spend_ledger", "launches", "positions", "meter", "fee_claims", "kv",
+      "commands", "web_sessions", "audit_log", "launch_outcomes", "tuning_runs",
+      "pipeline_stats", "declined", "profit_distributions",
+    ]) {
+      assert.ok(tables.has(t), `missing table ${t}`);
+    }
+  });
+});

@@ -64,6 +64,44 @@ export function statusOf(db: Db, cfg: Config, kill: KillSwitch): {
 }
 
 /** Headline counters, in plain units. */
+/**
+ * Net profit to date, computed rather than approximated.
+ *
+ * `dev_buy`/`dev_sell` spend_ledger rows are deliberately NOT summed here --
+ * they are already netted inside `positions.realized_pnl_sol` via
+ * entry_sol/exit_sol, so adding them again would double-count. The only
+ * spend not captured inside a position is the `'launch'` kind (creation
+ * rent/protocol fee, booked net of the dev buy) and the declared-but-not-yet
+ * -written `'tx_fee'` kind, kept for forward compatibility.
+ *
+ * This is strictly smaller than the client-side sums the dashboard has shown
+ * historically (`estimatedFeeSol + realisedPnlSol`), which never subtracted
+ * launch-creation spend at all.
+ */
+export function profitSummary(db: Db, cfg: Config) {
+  const m = mode(cfg);
+
+  const feesTotalSol = (db.prepare(
+    `SELECT COALESCE(SUM(sol_amount), 0) s FROM fee_claims WHERE dry_run = ?`,
+  ).get(m) as { s: number }).s;
+
+  const realisedPnlSol = (db.prepare(
+    `SELECT COALESCE(SUM(realized_pnl_sol), 0) p FROM positions WHERE status = 'closed' AND dry_run = ?`,
+  ).get(m) as { p: number }).p;
+
+  // Already negative.
+  const uncapturedSpendSol = (db.prepare(
+    `SELECT COALESCE(SUM(sol_delta), 0) s FROM spend_ledger WHERE dry_run = ? AND kind IN ('launch', 'tx_fee')`,
+  ).get(m) as { s: number }).s;
+
+  return {
+    feesTotalSol,
+    realisedPnlSol,
+    uncapturedSpendSol,
+    netProfitSol: feesTotalSol + realisedPnlSol + uncapturedSpendSol,
+  };
+}
+
 export function headlineStats(db: Db, cfg: Config) {
   const m = mode(cfg);
   const since = Date.now() - DAY;

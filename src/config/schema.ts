@@ -62,6 +62,31 @@ export const riskSchema = z.object({
     lossThrottleFactor: z.number().min(0.05).max(1).default(0.5),
     /** Settled-launch hit rate below which capacity is throttled. */
     minHitRateBeforeThrottle: z.number().min(0).max(1).default(0.05),
+
+    /**
+     * Scale today's effective allowance down when qualifying signal is thin,
+     * so the bot doesn't spend its full daily budget on marginal candidates
+     * just because they technically cleared the score threshold on a quiet
+     * news day. Can only ever move the allowance DOWN from the static
+     * ceiling above -- never above it. Off by default.
+     */
+    newsVolumeThrottle: z.object({
+      enabled: z.boolean().default(false),
+      /** Rolling window over which qualifying signal is counted. */
+      lookbackHours: z.number().positive().default(24),
+      /** At or below this many qualifying candidates in the window, apply
+       *  the full throttle (minScale). */
+      lowVolumeScoredCount: z.number().int().nonnegative().default(3),
+      /** At or above this many, apply no throttle (scale = 1.0). */
+      highVolumeScoredCount: z.number().int().nonnegative().default(20),
+      /** Multiplier applied to solPerDay on the quietest day. Linear ramp to
+       *  1.0 between lowVolumeScoredCount and highVolumeScoredCount. */
+      minScale: z.number().min(0).max(1).default(0.34),
+      /** Guaranteed minimum launches/day even on the quietest day -- but
+       *  only up to whatever runway/burn/static/loss-throttle already
+       *  permitted; this floor can never grant more than those allowed. */
+      floorLaunchesPerDay: z.number().int().min(0).default(1),
+    }).default({}),
   }).default({}),
 });
 
@@ -293,6 +318,29 @@ export const feesSchema = z.object({
   enabled: z.boolean().default(true),
 });
 
+/**
+ * Accounting groundwork only. There is no token yet, no recipient list, and
+ * no on-chain payout mechanism -- renaming or reweighting `splits` creates no
+ * entitlement and moves no funds. Deliberately absent from both `TUNABLE` and
+ * `FORBIDDEN_PREFIXES` in `src/learning/guardrails.ts`: the allowlist is
+ * default-deny, so simple absence already makes this unreachable by the
+ * tuner, and no allowlist edit should be made for it.
+ */
+export const distributionSchema = z.object({
+  /** Off by default. Nothing is ever written to profit_distributions until
+   *  this is explicitly turned on. Never touches BudgetGuard or spending. */
+  enabled: z.boolean().default(false),
+  /** Calculated splits applied to netProfitSol for reporting only. */
+  splits: z.array(z.object({
+    label: z.string(),
+    pct: z.number().min(0).max(100),
+  })).default([
+    { label: "token holders (future)", pct: 40 },
+    { label: "operator", pct: 50 },
+    { label: "weekly raffle", pct: 10 },
+  ]),
+}).default({});
+
 export const configSchema = z.object({
   /** Global no-op switch. When true, nothing ever signs or sends a transaction. */
   dryRun: z.boolean().default(true),
@@ -416,6 +464,7 @@ export const configSchema = z.object({
     dbPath: z.string().default("data/bot.db"),
     haltFile: z.string().default("data/HALT"),
   }).default({}),
+  distribution: distributionSchema,
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
     json: z.boolean().default(true),

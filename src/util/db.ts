@@ -270,6 +270,23 @@ const MIGRATIONS: string[] = [
   -- headline it came from. Keep the source's own text alongside it for display.
   ALTER TABLE signals ADD COLUMN source_text TEXT;
   `,
+
+  // v7 -- accounting groundwork for a possible future revenue-share token.
+  // Calculated figures only: no wallet transfer, no token-holder lookup, no
+  // snapshot/raffle logic. Stays empty until the operator explicitly runs
+  // `node src/cli.ts profit --record` with distribution.enabled = true.
+  `
+  CREATE TABLE profit_distributions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    computed_at    INTEGER NOT NULL,
+    period_start   INTEGER NOT NULL,
+    period_end     INTEGER NOT NULL,
+    net_profit_sol REAL    NOT NULL,
+    -- JSON array of { label, pct, sol } -- figures only, not money in motion.
+    splits         TEXT    NOT NULL
+  );
+  CREATE INDEX idx_distributions_period ON profit_distributions(period_end);
+  `,
 ];
 
 export function openDb(dbPath: string): Db {

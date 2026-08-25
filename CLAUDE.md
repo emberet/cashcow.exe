@@ -76,7 +76,7 @@ understanding what it was protecting against.
 ## Commands
 
 ```bash
-npm test                       # 103 tests — run before every commit
+npm test                       # 133 tests — run before every commit
 npx tsc --noEmit               # typecheck (no build step; Node strips types)
 
 npm run preflight              # verify every credential BY USING IT; nothing is signed
@@ -94,6 +94,10 @@ node src/cli.ts outcomes       # what happened to launched tokens
 node src/cli.ts learn --mandate  # exactly what the tuner may touch
 node src/cli.ts tuning --clear # discard everything learned
 node src/cli.ts halt "reason"  # stop launches (exits continue)
+node src/cli.ts profit [--record]  # net profit to date; --record snapshots the
+                                #   calculated 40/50/10 split (needs distribution.enabled)
+node src/cli.ts backtest-launches  # one-time historical research pass; proposes
+                                #   scoring changes, never edits config itself
 ```
 
 `feeds` and `score` force a poll; the runner respects each feed's own cadence.

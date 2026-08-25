@@ -8,7 +8,7 @@ import { configSchema } from "../src/config/schema.ts";
 import { openMemoryDb, type Db } from "../src/util/db.ts";
 import { validate, applyChanges, boundFor, FORBIDDEN_PREFIXES } from "../src/learning/guardrails.ts";
 import { sanitise, writeOverlay, readOverlay, clearOverlay } from "../src/learning/overlay.ts";
-import { computeCapacity, costPerLaunch, balanceNeededFor } from "../src/risk/capacity.ts";
+import { computeCapacity, costPerLaunch, balanceNeededFor, newsVolumeScale } from "../src/risk/capacity.ts";
 import { BudgetGuard } from "../src/risk/budget.ts";
 import { recordLaunch, outcomeSummary } from "../src/learning/outcomes.ts";
 import { corroborationStrength, distinctFamilies } from "../src/scoring/independence.ts";
@@ -302,6 +302,97 @@ describe("adaptive capacity — as many as the wallet sustains, never more", () 
       `disabling the dev buy should more than halve cost: ${withBuy} -> ${without}`);
     assert.ok(balanceNeededFor(cfg({ devPosition: { enabled: false } }), 24)
       < balanceNeededFor(cfg(), 24) / 2);
+  });
+});
+
+// ==================================================================
+// News-volume confidence throttle: a quiet day should never spend the full
+// daily allowance on marginal signal, and a strong day must never exceed
+// what every other constraint already allowed.
+// ==================================================================
+
+describe("news-volume throttle — moves the allowance down, never up", () => {
+  let db: Db;
+  beforeEach(() => { db = openMemoryDb(); });
+
+  function seedScored(n: number, ageHours = 1) {
+    db.prepare(
+      `INSERT INTO pipeline_stats (ts, scored, dry_run) VALUES (?, ?, 0)`,
+    ).run(Date.now() - ageHours * 3600_000, n);
+  }
+
+  const adaptive = (over: Record<string, unknown> = {}) =>
+    cfg({
+      risk: {
+        maxSolPerDay: 100,
+        adaptive: { enabled: true, minRunwayDays: 7, maxDailyBurnPct: 0.2, ...over },
+      },
+    });
+
+  const withThrottle = (over: Record<string, unknown> = {}) =>
+    adaptive({
+      newsVolumeThrottle: {
+        enabled: true, lookbackHours: 24,
+        lowVolumeScoredCount: 3, highVolumeScoredCount: 20,
+        minScale: 0.34, floorLaunchesPerDay: 1,
+        ...over,
+      },
+    });
+
+  test("newsVolumeScale: at/below low -> minScale, at/above high -> 1, midpoint interpolates", () => {
+    const t = { lowVolumeScoredCount: 0, highVolumeScoredCount: 10, minScale: 0.2 };
+    assert.equal(newsVolumeScale(0, t), 0.2);
+    assert.equal(newsVolumeScale(-5, t), 0.2);
+    assert.equal(newsVolumeScale(10, t), 1);
+    assert.equal(newsVolumeScale(999, t), 1);
+    assert.ok(Math.abs(newsVolumeScale(5, t) - 0.6) < 1e-9, `expected ~0.6, got ${newsVolumeScale(5, t)}`);
+  });
+
+  test("newsVolumeScale: a misconfigured high<=low bracket does not throw and stays conservative", () => {
+    const t = { lowVolumeScoredCount: 10, highVolumeScoredCount: 5, minScale: 0.3 };
+    assert.doesNotThrow(() => newsVolumeScale(3, t));
+    assert.equal(newsVolumeScale(3, t), 0.3);
+  });
+
+  test("a quiet day still gets the floor when the wallet has plenty of room", () => {
+    seedScored(1); // well below lowVolumeScoredCount
+    const c = withThrottle({ floorLaunchesPerDay: 1 });
+    const cap = computeCapacity(db, c, 10_000);
+    assert.ok(cap.launchesPerDay >= 1, `expected the floor to hold, got ${cap.launchesPerDay}`);
+    assert.equal(cap.detail.newsVolume?.throttled, true);
+    assert.equal(cap.detail.newsVolume?.scale, 0.34);
+  });
+
+  test("a strong day is not throttled and never exceeds the static ceiling", () => {
+    seedScored(25); // well above highVolumeScoredCount
+    const c = cfg({
+      risk: {
+        maxSolPerDay: 0.3,
+        adaptive: {
+          enabled: true,
+          newsVolumeThrottle: { enabled: true, lowVolumeScoredCount: 3, highVolumeScoredCount: 20 },
+        },
+      },
+    });
+    const cap = computeCapacity(db, c, 1000);
+    assert.equal(cap.detail.newsVolume?.throttled, false);
+    assert.equal(cap.detail.newsVolume?.scale, 1);
+    assert.ok(cap.solPerDay <= 0.3, `throttle-enabled capacity escaped the static ceiling: ${cap.solPerDay}`);
+  });
+
+  test("the floor never overrides a harder constraint — a wallet too small for one launch stays at zero", () => {
+    seedScored(0);
+    const c = withThrottle({ floorLaunchesPerDay: 1 });
+    // Same wallet size the plain-adaptive test uses to prove zero, not one.
+    assert.equal(computeCapacity(db, c, 0.2).launchesPerDay, 0);
+  });
+
+  test("disabled by default — zero behavior change from the plain adaptive path", () => {
+    seedScored(0); // even with thin signal seeded, nothing should react to it
+    const withoutThrottle = computeCapacity(db, adaptive(), 10).launchesPerDay;
+    const alsoWithoutThrottle = computeCapacity(db, adaptive(), 10).launchesPerDay;
+    assert.equal(withoutThrottle, alsoWithoutThrottle);
+    assert.equal(computeCapacity(db, adaptive(), 10).detail.newsVolume, undefined);
   });
 });
 

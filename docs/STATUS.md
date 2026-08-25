@@ -8,7 +8,7 @@ Honest state of play. Updated 2026-08-25.
 
 | Area | How |
 |---|---|
-| Safety rails, exit rules, filters, saturation, tuner guardrails, adaptive capacity | **103 tests**, `npm test` |
+| Safety rails, exit rules, filters, saturation, tuner guardrails, adaptive capacity | **133 tests**, `npm test` |
 | Types | `npx tsc --noEmit` clean, no build step |
 | Feed adapters | Live polls. 6 of 9 enabled feeds producing; 300 signals/poll |
 | Full signal pipeline | End-to-end dry run: feeds → phrases → score → filters → saturation → naming → artwork → recorded launch |

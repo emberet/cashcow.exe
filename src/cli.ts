@@ -49,6 +49,15 @@ cashcow.exe -- trend detection to pump.fun launcher
   tuning [--clear]      Show or discard what the tuner has learned
   halt [reason]         Stop new launches (open positions still exit)
   resume                Clear the halt
+  backtest-launches [--days-ago-start N] [--days-ago-end N] [--max-pages N] [--rpc URL]
+                         One-time historical research pass over past pump.fun
+                         launches; writes a report, proposes scoring changes
+                         for you to hand-apply, never edits config itself.
+                         --rpc points holder reads at a dedicated mainnet RPC
+                         instead of the slow public one, without needing
+                         network: mainnet-beta in config
+  profit [--record]     Net profit to date; --record also snapshots the
+                         calculated 40/50/10 split (requires distribution.enabled)
 
 Flags: --config <path>  --verbose  --json
 Feeds: ${allFeedIds().join(", ")}
@@ -200,6 +209,12 @@ async function main() {
       console.log(`  LAUNCHES / DAY  ${cap.launchesPerDay}`);
       console.log(`  limited by      ${cap.binding}`);
       if (cap.detail.throttled) console.log(`  THROTTLED       ${cap.detail.throttleReason}`);
+      if (cap.detail.newsVolume?.throttled) {
+        const nv = cap.detail.newsVolume;
+        console.log(`  NEWS VOLUME     ${nv.scoredCount} qualifying candidate(s) in the last ` +
+          `${nv.lookbackHours}h (need ${cfg.risk.adaptive.newsVolumeThrottle.highVolumeScoredCount}+ ` +
+          `for the full allowance) -> scaled to ${(nv.scale * 100).toFixed(0)}%`);
+      }
 
       console.log(`\n  wallet needed to sustain a given rate (dev buy ${cfg.devPosition.enabled ? cfg.devPosition.buySol : 0} SOL):`);
       for (const n of [3, 6, 12, 24, 48]) {
@@ -383,6 +398,33 @@ async function main() {
       break;
     }
 
+    case "profit": {
+      const { profitSummary } = await import("./web/queries.ts");
+      const p = profitSummary(db, cfg);
+      console.log(`\n  fees claimed        ${p.feesTotalSol.toFixed(5)} SOL`);
+      console.log(`  realised P&L        ${p.realisedPnlSol.toFixed(5)} SOL`);
+      console.log(`  launch/creation cost ${p.uncapturedSpendSol.toFixed(5)} SOL`);
+      console.log(`  ------------------------------------`);
+      console.log(`  NET PROFIT          ${p.netProfitSol.toFixed(5)} SOL`);
+      console.log(`  (excludes open positions' locked-up capital -- not lost, just deployed --`);
+      console.log(`   and the X-API USD meter, a different currency)\n`);
+
+      if (flags.get("record") === true) {
+        if (!cfg.distribution.enabled) {
+          console.log(`  --record requested but distribution.enabled is false; nothing written.\n`);
+          break;
+        }
+        const { recordDistributionSnapshot } = await import("./accounting/distribution.ts");
+        const snap = recordDistributionSnapshot(db, cfg, p.netProfitSol);
+        console.log(`  recorded distribution snapshot #${snap.id}:`);
+        for (const s of snap.splits) {
+          console.log(`    ${s.label.padEnd(24)} ${s.pct}%  ->  ${s.sol.toFixed(5)} SOL`);
+        }
+        console.log(`  (calculated figures only -- no funds moved, no token, no recipients yet)\n`);
+      }
+      break;
+    }
+
     case "halt":
       kill.halt(positional.join(" ") || "manual halt via CLI");
       break;
@@ -390,6 +432,22 @@ async function main() {
     case "resume":
       kill.resume();
       break;
+
+    case "backtest-launches": {
+      const { runBacktest, DEFAULT_BACKTEST_OPTS } = await import("./research/backtest.ts");
+      const num = (key: string, fallback: number) => {
+        const v = flags.get(key);
+        return typeof v === "string" && Number.isFinite(Number(v)) ? Number(v) : fallback;
+      };
+      const rpcOverride = flags.get("rpc");
+      await runBacktest(cfg, {
+        ...DEFAULT_BACKTEST_OPTS,
+        daysAgoStart: num("days-ago-start", DEFAULT_BACKTEST_OPTS.daysAgoStart),
+        daysAgoEnd: num("days-ago-end", DEFAULT_BACKTEST_OPTS.daysAgoEnd),
+        maxPages: num("max-pages", DEFAULT_BACKTEST_OPTS.maxPages),
+      }, typeof rpcOverride === "string" ? rpcOverride : undefined);
+      break;
+    }
 
     case "positions": {
       const rows = db.prepare(

@@ -1,5 +1,5 @@
 import type { Db } from "../util/db.ts";
-import type { Config } from "../config/schema.ts";
+import { isPretend, type Config } from "../config/schema.ts";
 import { outcomeSummary } from "../learning/outcomes.ts";
 
 /**
@@ -40,8 +40,39 @@ export type Capacity = {
     staticCeilingSol: number;
     throttled: boolean;
     throttleReason?: string;
+    newsVolume?: {
+      throttled: boolean;
+      scoredCount: number;
+      scale: number;
+      lookbackHours: number;
+    };
   };
 };
+
+/**
+ * Pure scaling function for the news-volume confidence throttle: a linear
+ * ramp from `minScale` (at or below the low bracket) to 1.0 (at or above the
+ * high bracket). Never returns more than 1.0, so it can only ever narrow the
+ * day's allowance, never widen it.
+ */
+export function newsVolumeScale(
+  scoredCount: number,
+  t: { lowVolumeScoredCount: number; highVolumeScoredCount: number; minScale: number },
+): number {
+  const hiSafe = Math.max(t.highVolumeScoredCount, t.lowVolumeScoredCount + 1);
+  if (scoredCount <= t.lowVolumeScoredCount) return t.minScale;
+  if (scoredCount >= hiSafe) return 1;
+  const ratio = (scoredCount - t.lowVolumeScoredCount) / (hiSafe - t.lowVolumeScoredCount);
+  return t.minScale + ratio * (1 - t.minScale);
+}
+
+function qualifyingSignalCount(db: Db, cfg: Config, hours: number): number {
+  const since = Date.now() - hours * 3600_000;
+  const row = db.prepare(
+    `SELECT COALESCE(SUM(scored), 0) AS n FROM pipeline_stats WHERE dry_run = ? AND ts > ?`,
+  ).get(isPretend(cfg) ? 1 : 0, since) as { n: number };
+  return row.n;
+}
 
 /** Estimated high: the budget guard should never be surprised by a cost. */
 export function costPerLaunch(cfg: Config): number {
@@ -120,9 +151,45 @@ export function computeCapacity(
     }
   }
 
+  // News-volume confidence throttle. Applied after every other constraint, so
+  // it only ever narrows what those already allowed -- never widens it.
+  const preNewsSolPerDay = solPerDay;
+  let newsVolume: Capacity["detail"]["newsVolume"];
+
+  if (a.newsVolumeThrottle.enabled) {
+    const t = a.newsVolumeThrottle;
+    const scoredCount = qualifyingSignalCount(db, cfg, t.lookbackHours);
+    const scale = newsVolumeScale(scoredCount, t);
+    newsVolume = { throttled: scale < 1, scoredCount, scale, lookbackHours: t.lookbackHours };
+
+    if (scale < 1) {
+      solPerDay = preNewsSolPerDay * scale;
+      // Deliberately does not touch the loss-throttle `throttled`/`throttleReason`
+      // pair above -- the CLI reads `detail.newsVolume` for this constraint
+      // specifically, so the two throttles' reasons never clobber each other.
+      binding =
+        `thin qualifying signal: ${scoredCount} candidate(s) cleared threshold in the last ` +
+        `${t.lookbackHours}h (need ${t.highVolumeScoredCount}+ for the full allowance); ` +
+        `scaled to ${(scale * 100).toFixed(0)}%`;
+    }
+  }
+
+  const rawLaunches = Math.max(0, Math.floor(solPerDay / perLaunch));
+  const preNewsLaunches = Math.max(0, Math.floor(preNewsSolPerDay / perLaunch));
+  const launchFloor = a.newsVolumeThrottle.enabled
+    ? Math.min(a.newsVolumeThrottle.floorLaunchesPerDay, preNewsLaunches)
+    : 0;
+
+  if (launchFloor > rawLaunches) {
+    // Restore just enough SOL to afford the floor -- but never more than
+    // runway/burn/static/loss-throttle already permitted before the news
+    // scale, so this can only undo THIS feature's own reduction.
+    solPerDay = Math.min(preNewsSolPerDay, launchFloor * perLaunch);
+  }
+
   const launches = Math.min(
     a.maxLaunchesPerDayCeiling,
-    Math.max(0, Math.floor(solPerDay / perLaunch)),
+    Math.max(launchFloor, Math.max(0, Math.floor(solPerDay / perLaunch))),
   );
 
   if (launches === a.maxLaunchesPerDayCeiling) {
@@ -143,6 +210,7 @@ export function computeCapacity(
       staticCeilingSol: cfg.risk.maxSolPerDay,
       throttled,
       throttleReason,
+      newsVolume,
     },
   };
 }
