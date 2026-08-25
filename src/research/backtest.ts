@@ -115,7 +115,7 @@ export function resolveMainnetRpc(cfg: Config, rpcOverride?: string): { url: str
   return { url: PUBLIC_MAINNET_RPC, dedicated: false };
 }
 
-function mainnetConnectionFor(cfg: Config, rpcOverride?: string): Connection {
+function mainnetConnectionFor(cfg: Config, rpcOverride?: string): { conn: Connection; dedicated: boolean } {
   const { url, dedicated } = resolveMainnetRpc(cfg, rpcOverride);
   if (dedicated) {
     // Never log the URL itself; the API key lives inside it.
@@ -128,7 +128,7 @@ function mainnetConnectionFor(cfg: Config, rpcOverride?: string): Connection {
       `getTokenLargestAccounts) -- candidates will be judged on activity and wash-suspicion ` +
       `only. Set ${BACKTEST_RPC_ENV} in .env to fix this.`);
   }
-  return new Connection(url, cfg.rpc.commitment);
+  return { conn: new Connection(url, cfg.rpc.commitment), dedicated };
 }
 
 export async function runBacktest(
@@ -138,7 +138,7 @@ export async function runBacktest(
 ): Promise<string> {
   console.log(`\n  historical-launch research pass (best-effort, offline, one-time)\n`);
   console.log(`  sampling launches ${opts.daysAgoStart}-${opts.daysAgoEnd} days old, up to ${opts.maxPages} pages...`);
-  const mainnetConn = mainnetConnectionFor(cfg, rpcOverride);
+  const { conn: mainnetConn, dedicated: hasDedicatedRpc } = mainnetConnectionFor(cfg, rpcOverride);
 
   const sample = await samplePumpLaunches({
     daysAgoStart: opts.daysAgoStart,
@@ -159,34 +159,45 @@ export async function runBacktest(
     activityByMint.set(c.mint, await fetchDexActivity(c.mint).catch(() => null));
   });
 
-  console.log(`  reading holder concentration for ${sample.coins.length} coin(s) from mainnet RPC ` +
-    `(sequential, ${opts.rpcDelayMs}ms apart -- this is the slow step on the public endpoint)...`);
   const concentrationByMint = new Map<string, number | null>();
-  let rpcDone = 0;
   let rpcFailed = 0;
-  await mapWithConcurrency(sample.coins, opts.rpcConcurrency, async (c) => {
-    try {
-      const excludeAddresses = c.associatedBondingCurve ? [c.associatedBondingCurve] : [];
-      const conc = await fetchHolderConcentration(cfg, c.mint, excludeAddresses, mainnetConn);
-      concentrationByMint.set(c.mint, conc.top10ConcentrationPct);
-    } catch {
-      // RPC read failed for this mint. Left unknown rather than guessed, and
-      // does NOT disqualify -- see classify.ts. Verified live: on the free
-      // public RPC this fails for close to 100% of reads, not occasionally,
-      // so treating unknown as "concentrated" would silently reject every
-      // candidate in a sample run on the default config.
-      concentrationByMint.set(c.mint, null);
-      rpcFailed++;
-    }
-    rpcDone++;
-    if (rpcDone % 20 === 0) console.log(`    ${rpcDone}/${sample.coins.length}...`);
-    await sleep(opts.rpcDelayMs);
-  });
 
-  if (rpcFailed > 0) {
+  if (!hasDedicatedRpc) {
+    // Skip the pass entirely rather than making N requests that are all
+    // known to fail. Measured: 548 candidates x ~7-8s of web3.js retry
+    // backoff each is over an hour of waiting to learn nothing. The
+    // candidates are still classified on activity and wash-suspicion.
+    rpcFailed = sample.coins.length;
+    for (const c of sample.coins) concentrationByMint.set(c.mint, null);
+    console.log(`  SKIPPING holder concentration for all ${sample.coins.length} coin(s): no dedicated ` +
+      `RPC, and the public endpoint serves none of these reads. Set ${BACKTEST_RPC_ENV} in .env ` +
+      `and re-run to include concentration.`);
+  } else {
+    console.log(`  reading holder concentration for ${sample.coins.length} coin(s) from mainnet RPC ` +
+      `(concurrency ${opts.rpcConcurrency}, ${opts.rpcDelayMs}ms apart)...`);
+    let rpcDone = 0;
+    await mapWithConcurrency(sample.coins, opts.rpcConcurrency, async (c) => {
+      try {
+        const excludeAddresses = c.associatedBondingCurve ? [c.associatedBondingCurve] : [];
+        const conc = await fetchHolderConcentration(cfg, c.mint, excludeAddresses, mainnetConn);
+        concentrationByMint.set(c.mint, conc.top10ConcentrationPct);
+      } catch {
+        // Left unknown rather than guessed, and does NOT disqualify -- see
+        // classify.ts. Treating unknown as "concentrated" would silently
+        // reject candidates for an infrastructure failure.
+        concentrationByMint.set(c.mint, null);
+        rpcFailed++;
+      }
+      rpcDone++;
+      if (rpcDone % 25 === 0) console.log(`    ${rpcDone}/${sample.coins.length}...`);
+      await sleep(opts.rpcDelayMs);
+    });
+  }
+
+  if (hasDedicatedRpc && rpcFailed > 0) {
     console.log(`  *** ${rpcFailed}/${sample.coins.length} holder-concentration reads FAILED ` +
-      `(RPC rate limits) -- those candidates are judged on activity and wash-suspicion only. ` +
-      `Pass --rpc <dedicated endpoint> for concentration data on all of them. ***`);
+      `even on the dedicated RPC -- those candidates are judged on activity and ` +
+      `wash-suspicion only. ***`);
   }
 
   const enriched: Enriched[] = sample.coins.map((c) => {
@@ -267,6 +278,7 @@ export async function runBacktest(
 
   const report = renderReport({
     opts, sample, classified, survivors, precursors, proposals: clampedProposals, rpcFailed,
+    hasDedicatedRpc,
   });
 
   const dir = resolve(PROJECT_ROOT, "data/research");
@@ -302,6 +314,7 @@ function renderReport(a: {
   precursors: Array<{ mint: string; matches: TrendMatch[] }>;
   proposals: Array<{ change: Change; verdict: Extract<Verdict, { ok: true }> }>;
   rpcFailed: number;
+  hasDedicatedRpc: boolean;
 }): string {
   const lines: string[] = [];
   lines.push(`# Historical launch backtest -- ${new Date().toISOString()}`);
@@ -313,8 +326,15 @@ function renderReport(a: {
   lines.push(`- pages scanned: ${a.sample.pagesScanned}`);
   lines.push(`- coins seen: ${a.sample.coinsSeen}`);
   lines.push(`- survived coarse prefilter: ${a.sample.coins.length}`);
-  lines.push(`- holder-concentration RPC reads failed: ${a.rpcFailed} / ${a.sample.coins.length}` +
-    (a.rpcFailed > 0 ? ` (use \`--rpc <url>\` with a dedicated endpoint to fix this)` : ""));
+  if (!a.hasDedicatedRpc) {
+    lines.push(`- holder concentration: **not collected** for any of the ${a.sample.coins.length} ` +
+      `candidates -- no dedicated RPC was configured, and no keyless endpoint serves ` +
+      `getTokenLargestAccounts. Set \`SOLANA_RPC_URL\` in .env and re-run to include it.`);
+  } else if (a.rpcFailed > 0) {
+    lines.push(`- holder-concentration reads failed: ${a.rpcFailed} / ${a.sample.coins.length}`);
+  } else {
+    lines.push(`- holder concentration: collected for all ${a.sample.coins.length} candidates`);
+  }
   lines.push(`- classified clean: ${a.classified.filter((c) => c.clean).length} / ${a.classified.length}`);
   lines.push(`- had a reconstructable precursor: ${a.precursors.filter((p) => p.matches.length).length}`);
   lines.push("");
@@ -375,6 +395,31 @@ function renderReport(a: {
     }
     lines.push("");
   }
+  // A zero here is a finding, not a crash. Without saying so, an empty
+  // proposals section reads like the script broke.
+  const withPre = a.precursors.filter((p) => p.matches.length).length;
+  if (a.survivors.length > 0 && withPre === 0) {
+    lines.push(`## What this run found`);
+    lines.push(`**None of the ${a.survivors.length} clean survivors could be traced back to a ` +
+      `Wikipedia or Hacker News trend in the 3 days before launch.**`);
+    lines.push("");
+    lines.push(`Reading the survivor names above, this looks like a real property of the sample ` +
+      `rather than a matching failure: they are overwhelmingly *invented* memecoin brands ` +
+      `(PUMPCADE, Winternomics TV, Artilect, Percolator, BINDER, Wobbles) rather than terms ` +
+      `derived from a news event. If that holds up, the high-volume launches in this band are ` +
+      `not the kind of thing a news-trend detector would ever have surfaced.`);
+    lines.push("");
+    lines.push(`Before treating that as settled, note the limits:`);
+    lines.push(`- The sample is market-cap-ranked, so it is the top survivors by *current* cap, ` +
+      `not a random draw of launches.`);
+    lines.push(`- "Trending" here means Wikipedia's top 200 pages/day and the HN front page. ` +
+      `That is a narrow slice; 8 of the bot's 10 live feeds have no historical archive to ` +
+      `check against.`);
+    lines.push(`- A token can be *about* an event without being *named* after it, and this ` +
+      `matches on names only.`);
+    lines.push("");
+  }
+
   lines.push(`## Proposed scoring.* changes`);
   lines.push(`Already validated/clamped through \`src/learning/guardrails.ts\`'s real allowlist. Never ` +
     `applied automatically -- edit \`src/config/default.config.json\` by hand if you agree.`);

@@ -5,6 +5,7 @@ import {
   classifyLaunch, washSuspicionScore, percentileRank, DEFAULT_THRESHOLDS,
 } from "../src/research/classify.ts";
 import { computeConcentration } from "../src/chain/holders.ts";
+import { similarity, tokens, normalize } from "../src/util/text.ts";
 import { resolveMainnetRpc, BACKTEST_RPC_ENV } from "../src/research/backtest.ts";
 import { redactEndpoint } from "../src/chain/rpc.ts";
 import { configSchema } from "../src/config/schema.ts";
@@ -244,5 +245,56 @@ describe("resolveMainnetRpc", () => {
       const red = redactEndpoint(url);
       assert.ok(!red.includes(secret), `redactEndpoint leaked the key for ${url}: got "${red}"`);
     }
+  });
+});
+
+// ==================================================================
+// Precursor matching. A real run surfaced "Main Page" as a trend and scored
+// "copper inu" against "Cooper Kupp" at 0.42 -- both fed a scoring proposal.
+// These guard the filters added in response.
+// ==================================================================
+
+describe("precursor match filtering", () => {
+  test("the noise band that produced junk matches is now below threshold", () => {
+    // Every one of these cleared the original 0.4 bar in a real run.
+    for (const [term, title] of [
+      ["copper inu", "Cooper Kupp"],
+      ["XerisCoin", "Terri Irwin"],
+      ["Elon Coin", "Elon Musk"],
+      ["Rainmaker", "Westlife"],
+    ] as const) {
+      const s = similarity(term, title);
+      assert.ok(s < 0.6, `"${term}" vs "${title}" scored ${s.toFixed(2)}, expected < 0.6`);
+    }
+  });
+
+  test("a genuinely matching title still clears the bar", () => {
+    assert.ok(similarity("Moo Deng", "Moo Deng") >= 0.6);
+    assert.ok(similarity("Chill Guy", "Chill guy") >= 0.6);
+  });
+
+  test("wikipedia navigation pages are excluded, matching the live feed", () => {
+    const WIKI_SKIP = /^(Main_Page|Special:|Wikipedia:|Portal:|Category:|File:|Help:|Template:|Talk:)/i;
+    for (const nav of ["Main_Page", "Special:Random", "Portal:Current_events", "Category:Foo"]) {
+      assert.ok(WIKI_SKIP.test(nav), `${nav} should be skipped`);
+    }
+    assert.ok(!WIKI_SKIP.test("Moo_Deng"), "a real article must not be skipped");
+  });
+
+  test("short generic one-word names cannot be attributed to a trend", () => {
+    // similarity()'s containment rule scores these >=0.9 against any title
+    // containing the word, which is right for saturation and wrong here.
+    const tooGeneric = (t: string) =>
+      tokens(t).length >= 2 ? false : normalize(t).replace(/\s/g, "").length < 6;
+
+    for (const generic of ["WAR", "HODL", "CTO", "ELON"]) {
+      assert.equal(tooGeneric(generic), true, `"${generic}" should be too generic to attribute`);
+    }
+    for (const specific of ["Moo Deng", "testicle", "maxxing", "copper inu"]) {
+      assert.equal(tooGeneric(specific), false, `"${specific}" should be attributable`);
+    }
+    // The exact failure from the real run: "WAR" matched three war articles at 0.90.
+    assert.ok(similarity("WAR", "World War II") >= 0.9, "containment still scores high...");
+    assert.equal(tooGeneric("WAR"), true, "...which is why the generic guard is what excludes it");
   });
 });

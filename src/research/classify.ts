@@ -66,7 +66,7 @@ export function classifyLaunch(input: ClassifyInput, t: ClassifyThresholds): Cla
   }
 
   if (input.top10ConcentrationPct === null) {
-    caveats.push("holder concentration unknown (RPC read failed) -- verify manually before trusting this one");
+    caveats.push("holder concentration unknown -- verify manually before trusting this one");
   } else if (input.top10ConcentrationPct >= t.maxConcentrationPct) {
     reasons.push(
       `top-10 holder concentration ${input.top10ConcentrationPct.toFixed(1)}% >= ` +

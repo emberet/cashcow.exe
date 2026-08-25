@@ -1,5 +1,5 @@
 import { fetchJson } from "../util/http.ts";
-import { similarity } from "../util/text.ts";
+import { similarity, tokens, normalize } from "../util/text.ts";
 
 /**
  * "What was trending right before this token was created?" -- reconstructed
@@ -19,8 +19,37 @@ export type TrendMatch = {
 };
 
 const HN_SEARCH = "https://hn.algolia.com/api/v1/search_by_date";
-const MIN_MATCH_SCORE = 0.4;
+
+/**
+ * Raised from 0.4 after reading a real run's output: the 0.42-0.49 band was
+ * entirely noise. Measured examples that cleared 0.4 -- "copper inu" vs
+ * "Cooper Kupp" (0.42), "XerisCoin" vs "Terri Irwin" (0.42). Attributing a
+ * token to a trend on that basis would feed junk into the scoring proposal.
+ */
+const MIN_MATCH_SCORE = 0.6;
 const MAX_MATCHES = 5;
+
+/**
+ * Namespace and portal pages are navigation, not subjects. The live feed
+ * adapter (`src/feeds/wikipedia.ts`) has always skipped these; this file did
+ * not, so "Main Page" was matching tokens as though it were a trend.
+ */
+const WIKI_SKIP = /^(Main_Page|Special:|Wikipedia:|Portal:|Category:|File:|Help:|Template:|Talk:)/i;
+
+/**
+ * A one-word generic name cannot be attributed to a specific trend by fuzzy
+ * title matching. `similarity()`'s containment rule scores a short term fully
+ * contained in a longer title at >=0.9, so "WAR" matched "World War II",
+ * "2026 Iran war" and "War Machine (2026 film)" all at 0.90 -- three
+ * "precursors" that are really just the word appearing in a title. That is
+ * correct behaviour for the saturation check it was written for, and wrong
+ * evidence here.
+ */
+function tooGenericToAttribute(term: string): boolean {
+  const content = tokens(term);
+  if (content.length >= 2) return false;
+  return normalize(term).replace(/\s/g, "").length < 6;
+}
 
 type HnHit = { title?: string; created_at_i?: number; objectID?: string };
 type HnResponse = { hits?: HnHit[] };
@@ -30,6 +59,8 @@ export async function findHnPrecursors(
   createdAtMs: number,
   windowHours = 72,
 ): Promise<TrendMatch[]> {
+  if (tooGenericToAttribute(term)) return [];
+
   const from = Math.floor((createdAtMs - windowHours * 3600_000) / 1000);
   const to = Math.floor(createdAtMs / 1000);
   const url = `${HN_SEARCH}?tags=story&numericFilters=created_at_i>${from},created_at_i<${to}`;
@@ -70,6 +101,8 @@ export async function findWikipediaPrecursors(
   createdAtMs: number,
   daysBack = 3,
 ): Promise<TrendMatch[]> {
+  if (tooGenericToAttribute(term)) return [];
+
   const out: TrendMatch[] = [];
 
   for (let d = 0; d < daysBack; d++) {
@@ -85,7 +118,7 @@ export async function findWikipediaPrecursors(
     }
 
     for (const a of (json.items?.[0]?.articles ?? []).slice(0, 200)) {
-      if (!a.article) continue;
+      if (!a.article || WIKI_SKIP.test(a.article)) continue;
       const title = decodeURIComponent(a.article).replace(/_/g, " ");
       const score = similarity(term, title);
       if (score < MIN_MATCH_SCORE) continue;
