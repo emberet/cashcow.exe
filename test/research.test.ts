@@ -1,10 +1,13 @@
-import { test, describe } from "node:test";
+import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
 import {
   classifyLaunch, washSuspicionScore, percentileRank, DEFAULT_THRESHOLDS,
 } from "../src/research/classify.ts";
 import { computeConcentration } from "../src/chain/holders.ts";
+import { resolveMainnetRpc, BACKTEST_RPC_ENV } from "../src/research/backtest.ts";
+import { redactEndpoint } from "../src/chain/rpc.ts";
+import { configSchema } from "../src/config/schema.ts";
 
 // ==================================================================
 // Pure math only -- no network. classify.ts and holders.ts's math are what
@@ -166,5 +169,80 @@ describe("computeConcentration", () => {
   test("no exclusions still produces a sane percentage", () => {
     const c = computeConcentration([{ address: "a", uiAmount: 1000 }], 1000, []);
     assert.equal(c.top10ConcentrationPct, 100);
+  });
+});
+
+// ==================================================================
+// RPC resolution for the backtest's holder reads.
+//
+// A dedicated RPC URL carries its API key inline (query string for Helius,
+// path for QuickNode/Alchemy), so two things matter: the right endpoint wins,
+// and the key never reaches a log line.
+// ==================================================================
+
+describe("resolveMainnetRpc", () => {
+  const PUBLIC = "https://api.mainnet-beta.solana.com";
+  const base = (over: Record<string, unknown> = {}) => configSchema.parse({ dryRun: true, ...over });
+
+  let saved: string | undefined;
+  beforeEach(() => { saved = process.env[BACKTEST_RPC_ENV]; delete process.env[BACKTEST_RPC_ENV]; });
+  afterEach(() => {
+    if (saved === undefined) delete process.env[BACKTEST_RPC_ENV];
+    else process.env[BACKTEST_RPC_ENV] = saved;
+  });
+
+  test("an explicit --rpc override wins over everything", () => {
+    process.env[BACKTEST_RPC_ENV] = "https://from-env.example/?api-key=env";
+    const r = resolveMainnetRpc(base(), "https://from-flag.example/?api-key=flag");
+    assert.equal(r.url, "https://from-flag.example/?api-key=flag");
+    assert.equal(r.dedicated, true);
+  });
+
+  test("SOLANA_RPC_URL is used when no flag is given", () => {
+    process.env[BACKTEST_RPC_ENV] = "https://from-env.example/?api-key=env";
+    const r = resolveMainnetRpc(base());
+    assert.equal(r.url, "https://from-env.example/?api-key=env");
+    assert.equal(r.dedicated, true);
+  });
+
+  test("a blank or whitespace env var does not count as configured", () => {
+    process.env[BACKTEST_RPC_ENV] = "   ";
+    const r = resolveMainnetRpc(base());
+    assert.equal(r.url, PUBLIC);
+    assert.equal(r.dedicated, false);
+  });
+
+  test("a devnet config never leaks into mainnet holder reads", () => {
+    // The bot's own rpc.primary is devnet; these mints are mainnet, so using
+    // it would fail every lookup. Must fall back to the public MAINNET url.
+    const cfg = base({ network: "devnet", rpc: { primary: "https://api.devnet.solana.com" } });
+    const r = resolveMainnetRpc(cfg);
+    assert.equal(r.url, PUBLIC);
+    assert.equal(r.dedicated, false);
+  });
+
+  test("cfg.rpc.primary is used only when the bot is already on mainnet", () => {
+    const cfg = base({ network: "mainnet-beta", rpc: { primary: "https://paid.example/?api-key=k" } });
+    const r = resolveMainnetRpc(cfg);
+    assert.equal(r.url, "https://paid.example/?api-key=k");
+    assert.equal(r.dedicated, true);
+  });
+
+  test("mainnet config still pointed at the public endpoint is not 'dedicated'", () => {
+    const cfg = base({ network: "mainnet-beta", rpc: { primary: PUBLIC } });
+    const r = resolveMainnetRpc(cfg);
+    assert.equal(r.dedicated, false);
+  });
+
+  test("redaction strips the API key from every provider URL shape", () => {
+    const cases = [
+      ["https://mainnet.helius-rpc.com/?api-key=SECRET123", "SECRET123"],          // Helius: query
+      ["https://x.solana-mainnet.quiknode.pro/SECRET123/", "SECRET123"],           // QuickNode: path
+      ["https://solana-mainnet.g.alchemy.com/v2/SECRET123", "SECRET123"],          // Alchemy: path
+    ] as const;
+    for (const [url, secret] of cases) {
+      const red = redactEndpoint(url);
+      assert.ok(!red.includes(secret), `redactEndpoint leaked the key for ${url}: got "${red}"`);
+    }
   });
 });

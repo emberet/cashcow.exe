@@ -53,9 +53,9 @@ cashcow.exe -- trend detection to pump.fun launcher
                          One-time historical research pass over past pump.fun
                          launches; writes a report, proposes scoring changes
                          for you to hand-apply, never edits config itself.
-                         --rpc points holder reads at a dedicated mainnet RPC
-                         instead of the slow public one, without needing
-                         network: mainnet-beta in config
+                         Holder reads need a dedicated mainnet RPC: set
+                         SOLANA_RPC_URL in .env (preferred -- keeps the key
+                         out of shell history), or pass --rpc explicitly
   profit [--record]     Net profit to date; --record also snapshots the
                          calculated 40/50/10 split (requires distribution.enabled)
 

@@ -7,6 +7,7 @@ import { validate, type Change, type Verdict } from "../learning/guardrails.ts";
 import { samplePumpLaunches } from "./pumpSample.ts";
 import { fetchDexActivity } from "./volume.ts";
 import { fetchHolderConcentration } from "../chain/holders.ts";
+import { redactEndpoint } from "../chain/rpc.ts";
 import { log } from "../util/log.ts";
 import { sleep } from "../util/http.ts";
 import { findHnPrecursors, findWikipediaPrecursors, type TrendMatch } from "./trendReconstruct.ts";
@@ -78,6 +79,9 @@ async function mapWithConcurrency<T, R>(
   return out;
 }
 
+export const BACKTEST_RPC_ENV = "SOLANA_RPC_URL";
+const PUBLIC_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
+
 /**
  * pump.fun's public listing API returns MAINNET launches -- that's where real
  * $500k-$2M volume happens, devnet has nothing comparable. So holder reads
@@ -85,19 +89,44 @@ async function mapWithConcurrency<T, R>(
  * to for the bot's own live/dry-run mode; reusing the bot's own (possibly
  * devnet) connection would silently fail every lookup against these mints.
  *
- * `rpcOverride` lets the operator point this script at a dedicated mainnet
- * RPC (e.g. Helius) without flipping `cfg.network` to mainnet-beta, which
- * has other implications for the live bot. Without it, this falls back to
- * the free public endpoint -- verified live to work, but heavily throttled:
- * roughly 7-8 seconds per request once web3.js's own 429 backoff kicks in.
- * A dedicated RPC is a lot faster; the public one is fine for a first run.
+ * Resolution order, most to least preferred:
+ *   1. `--rpc <url>` -- explicit, but puts the key in shell history.
+ *   2. `SOLANA_RPC_URL` in .env -- preferred. A dedicated RPC URL has the
+ *      API key embedded in the path (which is why `redactedConfig()` drops
+ *      RPC endpoints wholesale), so keeping it in .env means it never lands
+ *      in a terminal scrollback, a screenshot, or a chat transcript.
+ *   3. `cfg.rpc.primary`, but only when the bot is already pointed at mainnet.
+ *   4. The free public endpoint.
+ *
+ * Verified live: no keyless endpoint serves `getTokenLargestAccounts` for
+ * Solana mainnet -- the official one 429s, publicnode 403s, drpc answers
+ * "chain is not available on free plan". So on (4) concentration data is
+ * simply unavailable and every candidate carries an "unknown" caveat.
  */
+export function resolveMainnetRpc(cfg: Config, rpcOverride?: string): { url: string; dedicated: boolean } {
+  if (rpcOverride) return { url: rpcOverride, dedicated: true };
+
+  const fromEnv = process.env[BACKTEST_RPC_ENV];
+  if (fromEnv && fromEnv.trim()) return { url: fromEnv.trim(), dedicated: true };
+
+  if (cfg.network === "mainnet-beta" && cfg.rpc.primary !== PUBLIC_MAINNET_RPC) {
+    return { url: cfg.rpc.primary, dedicated: true };
+  }
+  return { url: PUBLIC_MAINNET_RPC, dedicated: false };
+}
+
 function mainnetConnectionFor(cfg: Config, rpcOverride?: string): Connection {
-  const url = rpcOverride ?? (cfg.network === "mainnet-beta" ? cfg.rpc.primary : "https://api.mainnet-beta.solana.com");
-  if (!rpcOverride && cfg.network !== "mainnet-beta") {
-    log.warn("backtest: using the public mainnet RPC for holder reads -- expect roughly " +
-      "7-8s/request once it starts throttling. Pass --rpc <url> with a dedicated endpoint " +
-      "to go much faster; this is fine as a first, slower run.");
+  const { url, dedicated } = resolveMainnetRpc(cfg, rpcOverride);
+  if (dedicated) {
+    // Never log the URL itself; the API key lives inside it.
+    log.info("backtest: using a dedicated mainnet RPC for holder reads", {
+      endpoint: redactEndpoint(url),
+    });
+  } else {
+    log.warn(`backtest: no dedicated RPC found, falling back to the free public endpoint. ` +
+      `Holder-concentration reads will FAIL there (verified: no keyless endpoint serves ` +
+      `getTokenLargestAccounts) -- candidates will be judged on activity and wash-suspicion ` +
+      `only. Set ${BACKTEST_RPC_ENV} in .env to fix this.`);
   }
   return new Connection(url, cfg.rpc.commitment);
 }
