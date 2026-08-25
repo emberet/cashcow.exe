@@ -464,3 +464,59 @@ blocklist only.
 
 **Links are `noopener noreferrer nofollow` and open in a new tab**, since every
 one of them is attacker-controlled text from a third-party feed.
+
+
+---
+
+## 23. Security review before mainnet: two real defects, one control that held
+
+A review run against the live system before any real money. Each finding was
+demonstrated against the running build first, then fixed, then re-attacked.
+
+### Finding 1 — login throttling keyed on a spoofable header (High)
+
+`clientIp()` trusted `X-Forwarded-For` unconditionally, and the per-address
+login lockout keyed on it. Measured against the running server: a fixed address
+locked out after 8 attempts, while **rotating the header allowed 30 of 30
+guesses with zero throttling** — the lockout was decorative against anyone who
+knew it was there.
+
+Compounding it, scrypt ran at defaults, ~24ms per guess.
+
+**Fix.** Throttling now keys on the socket peer address, which a client cannot
+forge. `X-Forwarded-For` is display-only, and only when `web.trustProxyHeader`
+says a proxy really is in front. scrypt raised to N=2^17, ~8x the work per
+attempt. Re-attacked: 8 allowed, 22 throttled.
+
+**Why it mattered.** Loopback-only today, but this project has repeatedly
+discussed exposing the dashboard. Admin compromise reaches force-sell, fee
+claims and the kill switch.
+
+### Finding 2 — unvalidated URL scheme reaching an href (Medium, CSP-contained)
+
+Feed URLs went into `<a href>` after HTML-escaping only. **Escaping does not
+touch the scheme**, so `javascript:alert(1)` survived intact — demonstrated end
+to end through `readingList`, including the `  jAvAsCrIpT:` padding-and-case
+variant. A Hacker News submission URL is whatever the submitter typed, so this
+was reachable by anyone.
+
+**Severity was checked, not assumed.** The page's own CSP (`script-src 'self'`)
+blocks `javascript:` execution — verified in the browser, the payload did not
+fire. So this was contained, not live. It is still fixed at the source, because
+a single control is a single point of failure and the URLs also enable ordinary
+phishing.
+
+**Fix.** `safeHttpUrl()` allows only `http:`/`https:`, strips leading control
+characters first, and is applied both at ingestion and on read — old rows must
+not become clickable retroactively.
+
+### What held — the tuner allowlist
+
+Feed text is attacker-controlled and flows into the tuner's evidence, so a
+hostile headline is a prompt-injection vector by construction. Fed a fully
+compliant model emitting `risk.maxSolPerDay: 999`, `devPosition.buySol: 10`,
+`filters.blockTrademarks: 0` and `dryRun: 0`, **six of seven were rejected and
+only the legitimate `scoring.threshold` was accepted.**
+
+This is the payoff for §9: the mandate is an allowlist in code, not an
+instruction in a prompt. A prompt would have been argued with.

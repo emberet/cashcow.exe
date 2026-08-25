@@ -7,6 +7,7 @@ import { PublicKey } from "@solana/web3.js";
 import { computeCapacity } from "../risk/capacity.ts";
 import { configuredWalletAddress } from "../chain/wallet.ts";
 import { compileFilters, checkTerm } from "../scoring/filters.ts";
+import { safeHttpUrl } from "../util/http.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
 import { outcomeSummary, settledOutcomes } from "../learning/outcomes.ts";
 import { tuningHistory } from "../learning/tuner.ts";
@@ -416,8 +417,13 @@ export function readingList(db: Db, cfg: Config, limit = 40) {
     const text = String(r.source_text || headline || r.term || "").trim();
     if (!text || text.length < 4) continue;
 
+    // Re-checked on read as well as on write: rows stored before the scheme
+    // check existed must not become clickable now.
+    const safeUrl = safeHttpUrl(r.url);
+    if (!safeUrl) continue;
+
     // One entry per link: several phrases are extracted from one article.
-    const key = String(r.url);
+    const key = safeUrl;
     if (seen.has(key)) continue;
 
     if (!checkTerm(text, displayFilters).allowed) continue;
@@ -432,7 +438,7 @@ export function readingList(db: Db, cfg: Config, limit = 40) {
         typeof meta.subreddit === "string" && meta.subreddit ? `r/${meta.subreddit}` :
         typeof meta.author === "string" && meta.author ? `@${meta.author}` : null,
       text: text.slice(0, 150),
-      url: String(r.url),
+      url: safeUrl,
       at: Number(r.ingested_at),
     });
     if (out.length >= limit) break;
@@ -780,7 +786,7 @@ function computeQueue(db: Db, cfg: Config, limit: number) {
       observations: c.observations,
       firstSeen: c.firstSeen,
       qualifies: c.score >= cfg.scoring.threshold && c.observations >= cfg.scoring.minObservations,
-      sampleUrl: c.sampleUrl ?? null,
+        sampleUrl: safeHttpUrl(c.sampleUrl),
     }));
 }
 

@@ -77,6 +77,36 @@ function backoff(attempt: number): number {
   return Math.min(500 * 2 ** attempt, 8000) + Math.random() * 250;
 }
 
+/**
+ * A URL safe to put in an `href`, or null.
+ *
+ * HTML-escaping does NOT make a URL safe: `esc()` touches `& < > " '` and
+ * leaves the scheme untouched, so `javascript:alert(1)` survives it intact and
+ * lands in a clickable link. Feed URLs are third-party data -- a Hacker News
+ * submission URL is whatever the submitter typed -- so the scheme has to be
+ * checked explicitly against an allowlist.
+ *
+ * Leading control characters and whitespace are stripped first, because
+ * browsers ignore them when resolving a scheme and "  jAvAsCrIpT:" is a
+ * perfectly good payload otherwise.
+ */
+export function safeHttpUrl(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[\u0000-\u0020]/g, "").trim();
+  if (!cleaned) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(cleaned);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  return parsed.toString();
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }

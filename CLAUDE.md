@@ -58,7 +58,16 @@ understanding what it was protecting against.
    opts out of the public page only). The private key is a different matter
    entirely — see below.
 
-10. **Secrets never reach logs, the database, or the dashboard.** The logger
+10. **Anything security-relevant keys on the socket address, never a header.**
+    `X-Forwarded-For` is attacker-supplied; trusting it for login throttling
+    allowed 30 of 30 password guesses. It is display-only, gated behind
+    `web.trustProxyHeader`.
+
+11. **Never put a third-party URL in an `href` without `safeHttpUrl()`.**
+    HTML-escaping does not touch the scheme, so `javascript:` survives it. Feed
+    URLs are whatever a stranger typed.
+
+12. **Secrets never reach logs, the database, or the dashboard.** The logger
    redacts on key name; `redactedConfig()` omits the RPC endpoint entirely because
    API keys live in those URLs.
 

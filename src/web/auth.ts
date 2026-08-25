@@ -20,6 +20,12 @@ import { log } from "../util/log.ts";
 
 const SESSION_TTL_MS = 12 * 3600_000;
 const SCRYPT_KEYLEN = 64;
+/**
+ * scrypt work factor. The default N=16384 measured ~24ms per guess, which is
+ * thin cover for a human-chosen password if throttling is ever defeated.
+ * N=2^17 costs ~8x more per attempt and is still imperceptible on one login.
+ */
+const SCRYPT_PARAMS = { N: 1 << 17, r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
 const COOKIE_NAME = "cashcow_admin";
 
 // Login throttling. In-memory is adequate: a restart clears it, and the bot is
@@ -35,7 +41,7 @@ export type AuthState =
 /** `scrypt$<saltHex>$<hashHex>` */
 export function hashPassword(password: string): string {
   const salt = randomBytes(16);
-  const derived = scryptSync(password, salt, SCRYPT_KEYLEN);
+  const derived = scryptSync(password, salt, SCRYPT_KEYLEN, SCRYPT_PARAMS);
   return `scrypt$${salt.toString("hex")}$${derived.toString("hex")}`;
 }
 
@@ -47,7 +53,7 @@ function verifyPassword(password: string, stored: string): boolean {
   const expected = Buffer.from(parts[2]!, "hex");
   if (salt.length === 0 || expected.length !== SCRYPT_KEYLEN) return false;
 
-  const derived = scryptSync(password, salt, SCRYPT_KEYLEN);
+  const derived = scryptSync(password, salt, SCRYPT_KEYLEN, SCRYPT_PARAMS);
   return timingSafeEqual(derived, expected);
 }
 
@@ -80,10 +86,17 @@ export type LoginResult =
   | { ok: true; token: string; expiresAt: number }
   | { ok: false; reason: string; retryAfterMs?: number };
 
-export function login(db: Db, password: string, ip: string): LoginResult {
+/**
+ * @param throttleKey  The real socket address. MUST NOT be anything the client
+ *                     can set -- keying this on `X-Forwarded-For` allowed
+ *                     unlimited guesses by rotating the header.
+ * @param label        Human-facing address for logs, which may be proxy-derived.
+ */
+export function login(db: Db, password: string, throttleKey: string, label = throttleKey): LoginResult {
   const state = authState();
   if (!state.configured) return { ok: false, reason: state.reason };
 
+  const ip = throttleKey;
   const rec = attempts.get(ip);
   if (rec && rec.count >= MAX_ATTEMPTS) {
     const elapsed = Date.now() - rec.first;
@@ -103,7 +116,7 @@ export function login(db: Db, password: string, ip: string): LoginResult {
     if (cur && now - cur.first < LOCKOUT_MS) cur.count++;
     else attempts.set(ip, { count: 1, first: now });
 
-    log.warn("admin login failed", { ip, attempts: attempts.get(ip)?.count });
+    log.warn("admin login failed", { ip: label, attempts: attempts.get(ip)?.count });
     return { ok: false, reason: "Incorrect password." };
   }
 
@@ -116,10 +129,10 @@ export function login(db: Db, password: string, ip: string): LoginResult {
   db.prepare(
     `INSERT INTO web_sessions (token_hash, created_at, expires_at, last_seen, label)
      VALUES (?, ?, ?, ?, ?)`,
-  ).run(sha256(token), now, expiresAt, now, ip);
+  ).run(sha256(token), now, expiresAt, now, label);
 
   pruneSessions(db);
-  log.info("admin login succeeded", { ip });
+  log.info("admin login succeeded", { ip: label });
   return { ok: true, token, expiresAt };
 }
 

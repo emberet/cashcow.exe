@@ -383,6 +383,15 @@ export const configSchema = z.object({
     /** Set true when running behind an HTTPS reverse proxy, so cookies get Secure. */
     behindTlsProxy: z.boolean().default(false),
     /**
+     * Trust `X-Forwarded-For` for the *displayed* client address.
+     *
+     * Off by default because the header is attacker-supplied: anything that
+     * reaches the socket can claim any address. Even when this is on, rate
+     * limiting still keys on the real socket address -- see auth.ts. This only
+     * affects what gets shown and logged.
+     */
+    trustProxyHeader: z.boolean().default(false),
+    /**
      * How long a rejected candidate is held back before the PUBLIC page shows
      * it. A live rejection feed still reveals what the bot is looking at right
      * now; delayed, it is an honest record instead of a tip sheet. The admin

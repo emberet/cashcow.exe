@@ -4,6 +4,7 @@ import type { RawSignal } from "../feeds/types.ts";
 import { extractPhrases } from "./phrases.ts";
 import { cryptoAffinity, tickerability } from "./affinity.ts";
 import { clamp01 } from "../feeds/types.ts";
+import { safeHttpUrl } from "../util/http.ts";
 import { corroborationStrength, describeCorroboration, distinctFamilies } from "./independence.ts";
 
 /**
@@ -59,7 +60,8 @@ export function ingestSignals(db: Db, signals: RawSignal[], feedWeights: Map<str
           clamp01(s.rawScore) * phrase.salience * weight,
           s.observedAt.getTime(),
           now,
-          s.url ?? null,
+          // Third-party feed data: only http(s) is ever stored.
+          safeHttpUrl(s.url),
           s.meta ? JSON.stringify(s.meta) : null,
           // The source's own words, for display. `term` is the extracted phrase.
           s.term.slice(0, 300),

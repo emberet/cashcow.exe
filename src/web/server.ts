@@ -136,7 +136,10 @@ async function handle(
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const path = url.pathname;
-  const ip = clientIp(req);
+  // Throttling keys on the unspoofable socket address; the audit log records
+  // the friendlier one, which may include a proxy-supplied hop.
+  const throttleKey = socketIp(req);
+  const ip = displayIp(req, cfg);
 
   securityHeaders(res);
 
@@ -147,7 +150,7 @@ async function handle(
   if (path === "/api/login" && req.method === "POST") {
     const body = await readBody(req);
     const password = typeof body.password === "string" ? body.password : "";
-    const result = login(db, password, ip);
+    const result = login(db, password, throttleKey, ip);
 
     if (!result.ok) {
       auditAction(db, "login_failed", result.reason, ip);
@@ -389,10 +392,33 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
   }
 }
 
-function clientIp(req: IncomingMessage): string {
-  const fwd = req.headers["x-forwarded-for"];
-  if (typeof fwd === "string" && fwd) return fwd.split(",")[0]!.trim().slice(0, 45);
+/**
+ * The address the connection actually came from. Cannot be forged by a client,
+ * because it is the socket peer rather than anything the client sent.
+ *
+ * **Everything security-relevant must key on this**, not on the display address
+ * below.
+ */
+function socketIp(req: IncomingMessage): string {
   return req.socket.remoteAddress ?? "unknown";
+}
+
+/**
+ * The address to *show* a human, which may come from a proxy header.
+ *
+ * `X-Forwarded-For` is attacker-supplied. Trusting it for rate limiting let a
+ * client rotate the header and get unlimited password guesses -- measured at
+ * 30/30 attempts allowed where a fixed address locked out after 8. It is now
+ * display-only, and only when the operator says a proxy is actually in front.
+ */
+function displayIp(req: IncomingMessage, cfg: Config): string {
+  if (cfg.web.trustProxyHeader) {
+    const fwd = req.headers["x-forwarded-for"];
+    if (typeof fwd === "string" && fwd) {
+      return `${fwd.split(",")[0]!.trim().slice(0, 45)} (via proxy)`;
+    }
+  }
+  return socketIp(req);
 }
 
 /**
