@@ -20,7 +20,8 @@
     "halt": "node src/cli.ts halt",
     "resume": "node src/cli.ts resume",
     "web": "node src/cli.ts web",
-    "admin-password": "node src/cli.ts admin-password"
+    "admin-password": "node src/cli.ts admin-password",
+    "preflight": "node src/cli.ts preflight"
   },
   "dependencies": {
     "@pump-fun/pump-sdk": "^1.36.0",

@@ -8,7 +8,7 @@ Honest state of play. Updated 2026-08-25.
 
 | Area | How |
 |---|---|
-| Safety rails, exit rules, filters, saturation, tuner guardrails, adaptive capacity | **92 tests**, `npm test` |
+| Safety rails, exit rules, filters, saturation, tuner guardrails, adaptive capacity | **103 tests**, `npm test` |
 | Types | `npx tsc --noEmit` clean, no build step |
 | Feed adapters | Live polls. 6 of 9 enabled feeds producing; 300 signals/poll |
 | Full signal pipeline | End-to-end dry run: feeds → phrases → score → filters → saturation → naming → artwork → recorded launch |
@@ -94,6 +94,17 @@ published fee schedule, not observation.
 ---
 
 ## Prerequisites to gather
+
+Run `npm run preflight -- --for-mainnet` to see which of these are actually
+missing, and `npm run preflight -- --links` for the signup links. Each check
+*uses* the credential rather than testing that it is non-empty — a revoked key
+and an absent one look identical to `echo $VAR`, and only one of them is obvious.
+
+- `ANTHROPIC_API_KEY` — <https://console.anthropic.com/settings/keys>
+- Pinata JWT (free tier) — <https://app.pinata.cloud/developers/api-keys>
+- Dedicated RPC — <https://dashboard.helius.dev/signup>,
+  <https://www.quicknode.com/chains/sol>, <https://www.alchemy.com/solana>
+- Mainnet wallet — generated locally, never a signup
 
 - Solana CLI — `sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"`
 - Dedicated RPC (Helius/Triton) — public endpoints will rate-limit you out of

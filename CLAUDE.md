@@ -76,8 +76,12 @@ understanding what it was protecting against.
 ## Commands
 
 ```bash
-npm test                       # 92 tests — run before every commit
+npm test                       # 103 tests — run before every commit
 npx tsc --noEmit               # typecheck (no build step; Node strips types)
+
+npm run preflight              # verify every credential BY USING IT; nothing is signed
+npm run preflight -- --for-mainnet   # judge mainnet readiness while still on devnet
+npm run preflight -- --links   # signup links for everything that is missing
 
 npm run dry-run                # full pipeline, zero transactions, no keys needed
 node src/cli.ts run --once     # single pass (useful under cron)

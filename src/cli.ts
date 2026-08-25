@@ -21,6 +21,7 @@ import { outcomeSummary, settledOutcomes, refreshOutcomes } from "./learning/out
 import { runTuning, tuningHistory } from "./learning/tuner.ts";
 import { overlaySummary, clearOverlay, writeOverlay } from "./learning/overlay.ts";
 import { describeMandate } from "./learning/guardrails.ts";
+import { runPreflight, SETUP_LINKS } from "./cli/preflight.ts";
 import { getBalanceSol } from "./chain/rpc.ts";
 import { loadWallet } from "./chain/wallet.ts";
 import { log, errFields } from "./util/log.ts";
@@ -41,6 +42,7 @@ cashcow.exe -- trend detection to pump.fun launcher
   positions             Show open and recent dev positions
   budget                Show the rolling 24h spend/launch/loss picture
   fees [--claim]        Show, and optionally claim, pump.fun creator fees
+  preflight [--links] [--for-mainnet]   Verify every credential by using it
   capacity [--balance N]  How many launches/day the wallet can sustain, and why
   outcomes [--refresh]  What happened to the tokens it launched
   learn [--apply] [--mandate]  Run a tuning pass from real outcomes
@@ -155,6 +157,29 @@ async function main() {
         }
       }
       console.log();
+      break;
+    }
+
+    case "preflight": {
+      if (flags.get("links") === true || flags.get("help") === true) {
+        console.log(SETUP_LINKS);
+        break;
+      }
+      console.log("\n  checking each credential by using it, not by testing it is non-empty\n");
+      const forMainnet = flags.get("for-mainnet") === true;
+      const results = await runPreflight(cfg, forMainnet);
+      const mark = { ok: "  ok  ", warn: " warn ", fail: " FAIL " };
+      for (const r of results) {
+        console.log(`  [${mark[r.status]}] ${r.name.padEnd(24)} ${r.detail}`);
+        if (r.fix) console.log(`${" ".repeat(35)}-> ${r.fix}`);
+      }
+      const fails = results.filter((r) => r.status === "fail").length;
+      const warns = results.filter((r) => r.status === "warn").length;
+      console.log(`\n  ${fails} blocking, ${warns} worth reading.`);
+      console.log(fails === 0
+        ? "  Nothing blocking. Re-read the warnings before you flip dryRun.\n"
+        : "  Not ready. `npm run preflight -- --links` has the signup links.\n");
+      if (fails > 0) process.exitCode = 1;
       break;
     }
 
