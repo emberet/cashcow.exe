@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { configSchema } from "../src/config/schema.ts";
 import { openMemoryDb, type Db } from "../src/util/db.ts";
 import { safeHttpUrl } from "../src/util/http.ts";
-import { login } from "../src/web/auth.ts";
+import { login, hashPassword, isLegacyHash } from "../src/web/auth.ts";
+import { scryptSync } from "node:crypto";
 import { readingList } from "../src/web/queries.ts";
 import { applyChanges } from "../src/learning/guardrails.ts";
 
@@ -114,6 +115,44 @@ describe("login throttling", () => {
     assert.equal(other.ok, false);
     assert.doesNotMatch(other.ok === false ? other.reason : "", /Too many/,
       "throttling one address must not lock everyone out");
+  });
+});
+
+// ==================================================================
+// Raising the KDF work factor must not lock existing operators out.
+// An earlier fix hard-coded the parameters on both sides, so bumping N made
+// every stored password fail with a bare "Incorrect password."
+// ==================================================================
+
+describe("password hash parameter versioning", () => {
+  test("a hash written under the old work factor still verifies", () => {
+    // The pre-versioning format: scrypt$salt$hash, Node's default N=16384.
+    const salt = Buffer.from("a".repeat(32), "hex");
+    const legacy = `scrypt$${salt.toString("hex")}$${
+      scryptSync("hunter2-correct", salt, 64, { N: 16384, r: 8, p: 1 }).toString("hex")}`;
+
+    process.env.ADMIN_PASSWORD_HASH = legacy;
+    const db = openMemoryDb();
+    assert.equal(login(db, "hunter2-correct", "5.0.0.1").ok, true,
+      "an existing password must survive a work-factor increase");
+    assert.equal(login(db, "wrong", "5.0.0.2").ok, false);
+  });
+
+  test("new hashes carry their parameters and verify", () => {
+    const fresh = hashPassword("hunter2-correct");
+    assert.match(fresh, /^scrypt\$\d+\$\d+\$\d+\$[0-9a-f]+\$[0-9a-f]{128}$/);
+    assert.equal(isLegacyHash(fresh), false);
+
+    process.env.ADMIN_PASSWORD_HASH = fresh;
+    assert.equal(login(openMemoryDb(), "hunter2-correct", "5.0.0.3").ok, true);
+    assert.equal(login(openMemoryDb(), "hunter3", "5.0.0.4").ok, false);
+  });
+
+  test("a hostile hash cannot demand absurd work of the server", () => {
+    // A stored hash is config, but config can be wrong or malicious.
+    process.env.ADMIN_PASSWORD_HASH =
+      `scrypt$999999999$8$1$${"aa".repeat(16)}$${"bb".repeat(64)}`;
+    assert.equal(login(openMemoryDb(), "anything", "5.0.0.5").ok, false);
   });
 });
 

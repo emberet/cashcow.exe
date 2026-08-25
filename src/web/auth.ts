@@ -38,23 +38,62 @@ export type AuthState =
   | { configured: false; reason: string }
   | { configured: true };
 
-/** `scrypt$<saltHex>$<hashHex>` */
+/**
+ * `scrypt$<N>$<r>$<p>$<saltHex>$<hashHex>`
+ *
+ * The work factor is stored *in* the hash. Raising the cost for new passwords
+ * must never invalidate existing ones -- an earlier version of this file
+ * hard-coded the parameters on both sides, so bumping N locked the operator out
+ * of their own portal with a bare "Incorrect password."
+ */
 export function hashPassword(password: string): string {
   const salt = randomBytes(16);
+  const { N, r, p } = SCRYPT_PARAMS;
   const derived = scryptSync(password, salt, SCRYPT_KEYLEN, SCRYPT_PARAMS);
-  return `scrypt$${salt.toString("hex")}$${derived.toString("hex")}`;
+  return `scrypt$${N}$${r}$${p}$${salt.toString("hex")}$${derived.toString("hex")}`;
 }
 
+/** Node's scrypt defaults, used by hashes written before params were stored. */
+const LEGACY_PARAMS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+
+/**
+ * Verify against the parameters the hash was CREATED with, not today's.
+ * That is what lets the work factor rise without locking anyone out.
+ */
 function verifyPassword(password: string, stored: string): boolean {
   const parts = stored.split("$");
-  if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+  if (parts[0] !== "scrypt") return false;
 
-  const salt = Buffer.from(parts[1]!, "hex");
-  const expected = Buffer.from(parts[2]!, "hex");
+  let params: { N: number; r: number; p: number; maxmem: number };
+  let saltHex: string | undefined;
+  let hashHex: string | undefined;
+
+  if (parts.length === 6) {
+    const [, n, r, p, salt, hash] = parts;
+    const N = Number(n), rr = Number(r), pp = Number(p);
+    if (!Number.isInteger(N) || !Number.isInteger(rr) || !Number.isInteger(pp)) return false;
+    // Guard against a hostile hash string demanding absurd work of us.
+    if (N < 1024 || N > (1 << 20) || rr < 1 || rr > 32 || pp < 1 || pp > 16) return false;
+    params = { N, r: rr, p: pp, maxmem: 512 * 1024 * 1024 };
+    saltHex = salt; hashHex = hash;
+  } else if (parts.length === 3) {
+    params = LEGACY_PARAMS;
+    saltHex = parts[1]; hashHex = parts[2];
+  } else {
+    return false;
+  }
+
+  const salt = Buffer.from(saltHex!, "hex");
+  const expected = Buffer.from(hashHex!, "hex");
   if (salt.length === 0 || expected.length !== SCRYPT_KEYLEN) return false;
 
-  const derived = scryptSync(password, salt, SCRYPT_KEYLEN, SCRYPT_PARAMS);
+  const derived = scryptSync(password, salt, SCRYPT_KEYLEN, params);
   return timingSafeEqual(derived, expected);
+}
+
+/** True when the stored hash predates parameter versioning and is worth rotating. */
+export function isLegacyHash(stored: string): boolean {
+  return stored.split("$").length === 3;
 }
 
 export function authState(): AuthState {
@@ -67,7 +106,9 @@ export function authState(): AuthState {
         "Generate one with: node src/cli.ts admin-password",
     };
   }
-  if (!/^scrypt\$[0-9a-f]+\$[0-9a-f]{128}$/.test(stored)) {
+  const legacy = /^scrypt\$[0-9a-f]+\$[0-9a-f]{128}$/.test(stored);
+  const versioned = /^scrypt\$\d+\$\d+\$\d+\$[0-9a-f]+\$[0-9a-f]{128}$/.test(stored);
+  if (!legacy && !versioned) {
     return {
       configured: false,
       reason:
@@ -121,6 +162,12 @@ export function login(db: Db, password: string, throttleKey: string, label = thr
   }
 
   attempts.delete(ip);
+
+  if (isLegacyHash(process.env.ADMIN_PASSWORD_HASH!)) {
+    log.warn("admin password hash uses the old work factor", {
+      note: "still valid; re-run `npm run admin-password` to upgrade it",
+    });
+  }
 
   const token = randomBytes(32).toString("base64url");
   const now = Date.now();
