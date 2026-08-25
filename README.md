@@ -45,7 +45,11 @@ Dry run needs no wallet, no RPC, and no Pinata account — it uses an ephemeral
 keypair, skips all chain reads, and skips the IPFS pin. What it proves is the
 signal pipeline: feeds → scoring → filters → saturation → naming → artwork.
 
-Then `cp .env.example .env` and fill in what you need.
+Then `cp .env.example .env` and fill in what you need, and run
+`npm run preflight` to confirm what you filled in actually authenticates — a
+revoked key and a missing one look identical to `echo $VAR`, and only one of
+them announces itself mid-launch. `npm run preflight -- --links` has the signup
+links for whatever is missing.
 
 ## Dashboard
 
@@ -125,6 +129,10 @@ on the same port — put TLS and a reverse proxy in front, set
 ## Commands
 
 ```bash
+npm run preflight              # check every credential by using it; signs nothing
+npm run preflight -- --for-mainnet   # judge mainnet readiness while still on devnet
+npm run preflight -- --links   # signup links for whatever is missing
+
 npm run feeds                  # poll every feed once, report what each returned
 npm run score                  # ranked candidates with score components
 npm run dry-run                # full loop, no transactions
@@ -311,15 +319,17 @@ feature into the thing that loses the money.
 ## Verification path
 
 1. `npm test` — safety rails, exit rules, filters, saturation, tuner guardrails,
-   adaptive capacity. **92 tests.**
+   adaptive capacity. **103 tests.**
 2. `npm run feeds` — live, read-only, free.
-3. **Local validator with the real program** — the only free way to exercise a
-   real launch. Requires the Solana CLI, which is not currently installed.
-   ```bash
-   solana-test-validator --clone-upgradeable-program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P --url mainnet-beta --reset
-   ```
-   The program's global config account needs cloning too.
-4. Devnet — wallet loading, signing, send/confirm/retry, persistence.
+3. `npm run preflight -- --for-mainnet` — every credential checked by *using*
+   it, not by testing that it is non-empty. Nothing is signed.
+4. **Devnet — done, and it works.** No local validator is needed; an earlier
+   version of this file said otherwise and was wrong. On 2026-08-24 two tokens
+   were created on devnet with a real dev buy, one was sold, and the launch
+   reconciled against the real wallet delta to **zero drift at 9 decimals**.
+   Signatures and the full table are in [docs/STATUS.md](docs/STATUS.md).
+   What devnet does *not* prove: economics, priority-fee competition, or that
+   anyone will trade the tokens.
 5. **Mainnet, one manual launch at the smallest dev buy.** Verify on Solscan,
    wait for trades, then confirm `node src/cli.ts fees` reports a non-zero
    balance and a claim lands SOL back. *This is the only test that proves the
