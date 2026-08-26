@@ -13,6 +13,7 @@ import { evaluateSaturation, everLaunched, type KnownToken } from "../src/scorin
 import { similarity, tickerize, normalize } from "../src/util/text.ts";
 import { recoverCasing } from "../src/feeds/googleTrends.ts";
 import { publishWalletAddress, publishedWalletAddress } from "../src/chain/wallet.ts";
+import { isAdminPath } from "../src/web/server.ts";
 
 const cfg = (over: Record<string, unknown> = {}) => configSchema.parse({ dryRun: false, ...over });
 
@@ -378,5 +379,35 @@ describe("invariant 4 — the web process never holds the wallet key", () => {
     delete process.env.TEST_ABSENT_SECRET_ENV;
     publishWalletAddress(db, c);
     assert.equal(publishedWalletAddress(db), null);
+  });
+});
+
+describe("admin surface can be removed, not just password-protected", () => {
+  // Why this exists: a configured password is not enough for an
+  // internet-facing instance. Login throttling keys on the socket address, and
+  // behind a tunnel every request arrives from 127.0.0.1 -- so the per-attacker
+  // bucket becomes one global bucket shared by the whole internet and the
+  // operator. Turning the surface off entirely is the honest answer.
+  const adminPaths = [
+    "/api/admin/snapshot", "/api/admin/halt", "/api/login",
+    "/api/logout", "/api/session", "/admin", "/admin.html", "/admin.js",
+  ];
+
+  test("every admin path is gated when adminEnabled is false", () => {
+    const c = configSchema.parse({ web: { adminEnabled: false } });
+    assert.equal(c.web.adminEnabled, false);
+    for (const p of adminPaths) {
+      assert.equal(isAdminPath(p), true, `${p} must be recognised as admin surface`);
+    }
+  });
+
+  test("public routes are never mistaken for admin surface", () => {
+    for (const p of ["/", "/api/public", "/api/stream", "/app.js", "/styles.css"]) {
+      assert.equal(isAdminPath(p), false, `${p} must stay reachable`);
+    }
+  });
+
+  test("admin is on by default, so local use is unchanged", () => {
+    assert.equal(configSchema.parse({}).web.adminEnabled, true);
   });
 });

@@ -143,6 +143,14 @@ async function handle(
 
   securityHeaders(res);
 
+  // Admin surface removed entirely when disabled -- checked before auth, before
+  // session validation, before anything reads a cookie. A public-facing
+  // instance should not even advertise that a portal exists, and 404 here means
+  // there is no login endpoint to grind against.
+  if (!cfg.web.adminEnabled && isAdminPath(path)) {
+    return sendJson(res, 404, { error: "not found" });
+  }
+
   const token = readCookie(req.headers.cookie);
   const isAdmin = validateSession(db, token);
 
@@ -442,6 +450,22 @@ async function walletBalance(db: Db, cfg: Config): Promise<number | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Every path that belongs to the admin surface -- the API, the auth endpoints,
+ * and the static assets that make up the portal page.
+ *
+ * The auth endpoints count as admin: leaving `/api/login` reachable on an
+ * instance with no portal would expose a password oracle for no benefit. Only
+ * `admin.js` ever calls them, so the public page loses nothing.
+ */
+export function isAdminPath(path: string): boolean {
+  if (path.startsWith("/api/admin")) return true;
+  if (path === "/api/login" || path === "/api/logout" || path === "/api/session") return true;
+  if (path === "/admin" || path === "/admin/" || path === "/admin.html") return true;
+  if (path === "/admin.js") return true;
+  return false;
 }
 
 function hash(s: string): string {

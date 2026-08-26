@@ -426,6 +426,23 @@ export const configSchema = z.object({
     port: z.number().int().min(1).max(65535).default(4600),
     /** Serve the public dashboard. Turn off to run an admin-only instance. */
     publicEnabled: z.boolean().default(true),
+    /**
+     * Serve the admin portal at all.
+     *
+     * A configured password is NOT sufficient protection for an
+     * internet-facing instance, for a reason that is easy to miss: login
+     * throttling keys on the socket address (invariant 10), and behind a
+     * tunnel or reverse proxy every request arrives from 127.0.0.1. That
+     * collapses the per-attacker throttle into a single shared bucket -- so
+     * one attacker's failures lock out the operator, and the limit no longer
+     * tracks individual attackers at all.
+     *
+     * When this is off the admin routes and assets return 404 before any auth
+     * check runs: the surface is absent, not merely guarded. Run the
+     * public-facing instance with this false and keep an admin instance on
+     * loopback.
+     */
+    adminEnabled: z.boolean().default(true),
     /** How often the server re-reads state and pushes to connected browsers. */
     pushIntervalSeconds: z.number().positive().default(3),
     /** Set true when running behind an HTTPS reverse proxy, so cookies get Secure. */
