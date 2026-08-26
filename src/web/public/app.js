@@ -95,7 +95,8 @@ function render(d) {
   const f = d.funnel;
   const sniffed = f.gates[0]?.pass ?? 0;
   const burped = f.gates[7]?.pass ?? 0;
-  const net = (s.feesTotalSol || 0) + (s.realisedPnlSol || 0);
+  // Server-computed: fees + realised P&L MINUS launch/creation spend.
+  const net = s.netProfitSol || 0;
 
   $("hero-bubble").innerHTML = sniffed > 0
     ? `Moo. I ate ${int(sniffed)} rumours today<br>and burped out ${int(burped)} coin${burped === 1 ? "" : "s"}.`

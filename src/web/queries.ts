@@ -136,6 +136,11 @@ export function headlineStats(db: Db, cfg: Config) {
     `SELECT COUNT(DISTINCT norm) n FROM signals WHERE ingested_at > ?`,
   ).get(since) as { n: number }).n;
 
+  // The authoritative net figure, not fees+P&L. Both dashboards used to add
+  // those two client-side, which silently omitted the rent and protocol fee
+  // of every launch ever made and so overstated profit.
+  const profit = profitSummary(db, cfg);
+
   return {
     launches24h,
     launchesTotal,
@@ -146,6 +151,8 @@ export function headlineStats(db: Db, cfg: Config) {
     winRate: realised.n > 0 ? realised.wins / realised.n : null,
     signals24h,
     termsTracked,
+    launchSpendSol: profit.uncapturedSpendSol,
+    netProfitSol: profit.netProfitSol,
   };
 }
 

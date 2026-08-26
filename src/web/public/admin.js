@@ -304,7 +304,10 @@ function render(d) {
 
   // --- money
   const o = d.outcomes;
-  const net = (o.estimatedFeeSol || 0) + (o.realisedPnlSol || 0);
+  // From stats, not outcomes: fee_claims is the exact total, while
+  // outcomes.estimatedFeeSol is a per-token apportionment. And this
+  // subtracts launch spend, which the old client-side sum did not.
+  const net = d.stats.netProfitSol || 0;
   $("a-money-plates").innerHTML = `
     <div class="plate hero-plate">
       <div class="cap">CREATOR-FEE MILK</div>
