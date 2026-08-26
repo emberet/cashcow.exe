@@ -668,3 +668,116 @@ change was needed to keep it out.
 same as `everLaunched` and `selfLaunched` before it. A long dry-run session
 therefore suppresses real launches of those topics for 24h. That errs toward
 fewer launches, which is the safe direction, so it is left as is.
+
+## 27. Serving the dashboard from a domain, and keeping it up
+
+The public dashboard ran on a Cloudflare **quick tunnel** — anonymous, random
+hostname, dead the moment the process stopped or the Mac slept, and back as a
+*different* random URL. Unshareable and unbookmarkable by construction.
+
+**Named tunnel over the alternatives.** Port-forwarding plus Caddy would expose
+the home IP, need router access, and break on every ISP address change. A VPS
+adds cost and a second machine to maintain. The tunnel makes only *outbound*
+connections, hides the origin IP, and terminates TLS at Cloudflare's edge.
+
+**Buying at Cloudflare Registrar was load-bearing, not incidental.** The domain
+lands in the account with Cloudflare nameservers already authoritative, so
+`tunnel route dns` works immediately. Registering elsewhere adds a nameserver
+repoint and hours of propagation before the CNAME target — which only resolves
+inside a Cloudflare zone — can be created at all.
+
+**The tunnel points at 4601 and must never point at 4600.** Two web processes
+run: 4600 is the bot's own dashboard with `adminEnabled: true`, and 4601 is a
+separate instance under `public.config.json` with admin off. Aiming the tunnel
+at 4600 would publish the admin portal to the internet. The distinction is
+verified by asserting `/admin`, `/api/admin/snapshot` and `/api/login` all
+return **404** on the public hostname — proving the surface is *absent*, not
+merely password-guarded. A catch-all `http_status:404` rule means any other
+hostname arriving on the tunnel gets nothing.
+
+No code changed. Every client path is already relative (including the SSE
+`EventSource("/api/stream")`), the server reads `Host` only to parse the
+pathname, and the CSP is origin-agnostic (`default-src 'self'`). Both servers
+still bind loopback only, so the tunnel is the sole ingress.
+
+**LaunchAgents, not a LaunchDaemon.** The bot must run as the user — it needs
+the repo, `.env`, and the keypair — and a tunnel starting at *boot* while the
+bot starts at *login* would serve 502s in the gap. Starting them together at
+login is the coherent pairing, and avoids running a money-spending process as
+root. `WorkingDirectory` must be the repo: that is what makes `src/cli.ts` find
+`.env`, and therefore what makes the admin password and API keys load at all.
+
+**`cloudflared service install` generates a broken plist.** It writes
+`ProgramArguments` containing only the binary path with no subcommand, so
+cloudflared prints its usage text and exits on every launch attempt — while
+still reporting "installed successfully". The domain returned 530 with the
+agent showing status 1 and no process. It needs the explicit `tunnel run
+<name>` and an absolute `--config`, because launchd neither expands `~` nor
+runs a login shell and will not otherwise find `~/.cloudflared`. `KeepAlive`
+was also changed from exit-code-conditional to unconditional.
+
+**Known exposure:** this is a laptop. `pmset -c sleep 0` only covers AC power,
+and closing the lid sleeps the machine regardless, which drops the tunnel.
+
+## 28. The safety gates read `network`; the money follows `rpc.primary`
+
+Found by inspection, not by loss, and only because the wallet happened to be
+empty on the other chain.
+
+`config.json` had `rpc.primary` pointing at `mainnet.helius-rpc.com` while
+`network` still said `devnet`, with `dryRun: false` and `launch.simulate:
+false`. Those two fields are read by different things:
+
+- Every mainnet-specific interlock keys on `cfg.network`. Invariant 8 — live
+  mainnet requires `ANTHROPIC_API_KEY` for the brand/likeness screen — checks
+  `network === "mainnet-beta"` and stands down otherwise.
+- Transactions are built and sent against whatever `cfg.rpc.primary` resolves
+  to.
+
+So a config claiming devnet was signing against real mainnet with every
+mainnet guard disarmed. Nothing was lost for exactly one reason: a Solana
+keypair is the same address on both chains, and that address held 0 SOL on
+mainnet, so transactions failed on insufficient funds. Funding the wallet —
+which was already on the task list — would have removed the only thing standing
+in the way.
+
+**The mismatch is silent by design elsewhere in the file.** `redactedConfig()`
+drops the RPC endpoint entirely (Invariant 12: API keys live in those URLs), so
+the dashboard cannot show the disagreement, and the startup banner logs
+`network` without the endpoint. Nothing surfaces the pair together.
+
+Fixed by repointing to `devnet.helius-rpc.com` — Helius uses one API key across
+both networks and differs only by hostname, so the credential was preserved.
+
+**The general lesson:** `network` is a *label*; `rpc.primary` is the *fact*. Any
+future guard that means "are we spending real money?" should derive that from
+the endpoint, or the two should be validated against each other in
+`assertCoherent()`. Until that exists, treat changing `rpc.primary` as
+equivalent to changing `network`, and re-run `preflight` after either.
+
+## 29. Resetting throughput off the devnet numbers
+
+The caps were sized for devnet, where SOL is free and refillable: 45
+launches/day x 0.2 SOL = 9 SOL/day, with `maxSolPerDay: 9` chosen to be exactly
+that product. On mainnet that is ~10 SOL/day of real money, and section 1 has
+the arithmetic on why a high launch rate loses: per-launch costs are fixed and
+certain, the payoff is heavy-tailed and rare.
+
+Reset to **9 launches/day at an unchanged 0.2 SOL dev buy** — 1.8 SOL/day of
+buys, ~2.03 SOL/day including the ~0.025 create cost.
+`maxConcurrentPositions` came down from 45 to match, having been dead slack.
+
+**`maxSolPerDay` was then cut from 9 to 2.5, and this is the point of the
+change.** Left at 9 it would no longer bind: the launch path implies 2.03, so a
+bug in exits, fee claims or retries could spend 4x what the launch cap suggests
+with nothing watching. `assertCoherent()` permits it (1.8 < 9) because it only
+rejects a launch cap the SOL budget *cannot fund* — it has no opinion on a
+ceiling that is merely far too loose. A backstop that cannot be reached is not a
+backstop.
+
+Lowering it immediately surfaced a second problem: `assertCoherent()` refused
+the config because `maxDailyLossSol` was still 5, above the new 2.5 ceiling —
+*"the loss circuit-breaker can never trip."* It had been coherent only by
+accident of the old, larger ceiling. Set to 1.5, so the day halts after losing
+60% of the allowance with room for the loss to be realised before the spend
+ceiling trips first and masks it.
