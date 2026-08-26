@@ -19,3 +19,4 @@ wallet*.json
 keypair*.json
 *keypair*.json
 data/*keypair*.json
+.DS_Store
