@@ -842,11 +842,27 @@ One thing did not survive cleanly, and it had been happening since the two
 LaunchAgents were installed.
 
 **The bot and the public web server race for `data/bot.db` at startup, and the
-loser used to die.** WAL lets them read concurrently, but a writer still takes
-an exclusive lock, and SQLite's default `busy_timeout` is **0** — contention
-fails *instantly* rather than waiting. At boot both agents start together, both
-call `migrate()`, which opens a transaction even when there is nothing to
-migrate, and the loser exited with `database is locked`.
+loser used to die** with `database is locked`. At boot both agents start
+together, and one of them lost.
+
+The first fix was wrong, and the way it was wrong is the useful part. It
+attributed the crash to `migrate()` opening a transaction, and set
+`PRAGMA busy_timeout` to make contention wait instead of failing. Both halves
+were mistaken:
+
+- `migrate()` opens no transaction when there is nothing to migrate — the loop
+  body never runs once `user_version` matches. Verified by holding a write lock
+  from a second process and calling `openDb()`: it succeeded in 0ms.
+- The stack had said so all along. It named `db.ts:298`, which was
+  `PRAGMA journal_mode = WAL`, not `migrate()`. The claim was asserted from
+  reading the code rather than from the evidence already in the log.
+
+**`PRAGMA journal_mode` is the one statement `busy_timeout` cannot help.**
+Changing the journal mode requires exclusive access, and SQLite returns
+SQLITE_BUSY *without ever invoking the busy handler*. Measured: with
+`busy_timeout` at 3000ms it still failed in 0ms. So the original fix could not
+have protected the failing line — and it was placed *after* that line anyway,
+where it could not have applied to it even if the pragma had honoured it.
 
 It was invisible for three reasons, which is the interesting part:
 
@@ -858,18 +874,35 @@ It was invisible for three reasons, which is the interesting part:
 - `launchctl list` showed it plainly as last-exit **1** on `com.cashcow.public`,
   but a non-zero exit next to a running PID reads as historical noise.
 
-Fixed with `PRAGMA busy_timeout` in `openDb()`. At a few writes per minute,
-waiting costs nothing and the alternative is a hard crash. `com.cashcow.public`
-now reports last exit 0 after a simultaneous restart.
+The actual fix has two parts, for the two actual problems:
 
-**On the tests.** The regression guard is the one asserting `openDb` applies a
-non-zero timeout — verified by removing the fix and watching it fail. A second
-test pins the mechanism with both arms (timeout 0 fails in <100ms; timeout set
-blocks then gives up) so the guard is not mistaken for cargo cult. That second
-test deliberately overrides the pragma on its own connection and therefore
-passes with or without the fix; it is documentation, not a guard, and says so.
-Using the real `BUSY_TIMEOUT_MS` would have added 5s to every suite run for no
-extra coverage.
+1. **Read the journal mode before writing it.** Reading is an ordinary read and
+   takes no exclusive lock, and on every boot after the first the answer is
+   already `wal`, so the contended statement is never issued at all. Only a
+   genuine conversion contends, and that path gets a bounded retry
+   (`WAL_RETRIES` x `WAL_RETRY_MS`) because no timeout can cover it.
+2. **Set `busy_timeout`, and set it FIRST.** It does not help journal_mode, but
+   it does cover the migrations and every ordinary write afterwards, which
+   would otherwise also fail instantly under contention. Ordering is
+   load-bearing rather than stylistic: the pragma only affects statements
+   executed after it.
+
+`com.cashcow.public` now reports last exit 0 after a simultaneous restart.
+
+**On the tests.** The first version of this test suite was theatre for the part
+that mattered: it asserted the timeout pragma was set, and separately
+demonstrated the timeout mechanism on a connection it configured itself — so
+that second test passed with or without the fix, and neither test touched
+`journal_mode`, the line that actually crashed.
+
+The replacement reproduces the crash rather than describing it: a real second
+process takes a write lock on a not-yet-WAL database, and `openDb()` must
+still complete. Verified in both directions — it fails against the original
+code (throws in ~26ms) and passes against the fix (waits ~760ms for the holder
+to release, then succeeds). A separate process is required; an in-process
+connection would not reproduce the boot scenario, and node:sqlite's synchronous
+API means a blocking wait in the test process would deadlock against any timer
+meant to release the lock.
 
 **Sleep.** `sudo pmset -c sleep 0` is applied — AC power shows `sleep 0`. Note
 that *battery* still shows `sleep 1`, so unplugging drops the site after a

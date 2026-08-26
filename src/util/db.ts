@@ -295,26 +295,67 @@ const MIGRATIONS: string[] = [
  */
 export const BUSY_TIMEOUT_MS = 5000;
 
+/** Bounded retry for the one statement that ignores `busy_timeout`. */
+export const WAL_RETRIES = 25;
+export const WAL_RETRY_MS = 100;
+
+/** Blocking sleep. node:sqlite is synchronous, so there is no event loop to yield to. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Put the database in WAL mode, tolerating another process doing the same.
+ *
+ * This is the line that actually crashed the public web server at boot
+ * (`db.ts:298`, "database is locked"). Two things make it special, and both
+ * were missed the first time this was "fixed":
+ *
+ *  1. **Changing journal_mode needs exclusive access, and it does NOT honour
+ *     `busy_timeout`.** SQLite returns SQLITE_BUSY immediately without ever
+ *     invoking the busy handler, so no timeout value can protect it. Measured:
+ *     with busy_timeout at 3000ms it still failed in 0ms.
+ *  2. **Reading the mode is an ordinary read** and needs no exclusive lock.
+ *
+ * So: read first and skip the write entirely when the file is already WAL,
+ * which is the normal case on every boot after the first. Only a genuine
+ * conversion contends, and that is what the bounded retry covers -- the loser
+ * of a first-run race just needs the winner to finish.
+ */
+function ensureWal(db: Db): void {
+  const read = () => (db.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode;
+  if (read().toLowerCase() === "wal") return;
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      db.exec("PRAGMA journal_mode = WAL");
+      return;
+    } catch (err) {
+      // The other process may have completed the conversion for us.
+      if (read().toLowerCase() === "wal") return;
+      if (attempt >= WAL_RETRIES) throw err;
+      sleepSync(WAL_RETRY_MS);
+    }
+  }
+}
+
 export function openDb(dbPath: string): Db {
   if (handle) return handle;
   const abs = isAbsolute(dbPath) ? dbPath : resolve(PROJECT_ROOT, dbPath);
   mkdirSync(dirname(abs), { recursive: true });
 
   const db = new DatabaseSync(abs);
-  db.exec("PRAGMA journal_mode = WAL");
+
+  // FIRST, before anything that can contend. busy_timeout only affects
+  // statements executed after it, so ordering here is load-bearing rather than
+  // stylistic: two processes open this file (the bot and the public web
+  // server), and SQLite's default timeout is 0 -- contention fails INSTANTLY
+  // instead of waiting. At a few writes per minute, waiting is free.
+  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   db.exec("PRAGMA foreign_keys = ON");
   // Durability matters more than throughput here; we write a few rows per minute.
   db.exec("PRAGMA synchronous = FULL");
-  // Two processes open this file: the bot and the public web server. WAL lets
-  // them read concurrently, but the writer still takes an exclusive lock, and
-  // SQLite's default busy_timeout is 0 -- contention fails INSTANTLY rather
-  // than waiting. At boot both LaunchAgents start at once, both call migrate()
-  // (which opens a transaction even when there is nothing to migrate), and the
-  // loser died with "database is locked". KeepAlive restarted it, so the only
-  // symptom was the public dashboard being down for the ~10s ThrottleInterval
-  // on every reboot. Waiting instead of failing costs nothing at a few writes
-  // per minute.
-  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  ensureWal(db);
 
   migrate(db);
   handle = db;
