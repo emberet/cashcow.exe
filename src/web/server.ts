@@ -64,7 +64,7 @@ export function startWebServer(db: Db, cfg: Config, kill: KillSwitch): Promise<W
     if (!clients.size) return;
     // Fire and forget: keeps the cached balance warm without making the push
     // loop async. Its own TTL stops this hammering the RPC.
-    void refreshWallet(cfg).catch(() => {});
+    void refreshWallet(db, cfg).catch(() => {});
     try {
       const pub = JSON.stringify(publicSnapshot(db, cfg, kill));
       const pubHash = hash(pub);
@@ -180,7 +180,7 @@ async function handle(
   // ---------------------------------------------------------------- public
   if (path === "/api/public") {
     if (!cfg.web.publicEnabled) return sendJson(res, 404, { error: "public dashboard disabled" });
-    if (cfg.web.showWallet) await refreshWallet(cfg).catch(() => {});
+    if (cfg.web.showWallet) await refreshWallet(db, cfg).catch(() => {});
     return sendJson(res, 200, publicSnapshot(db, cfg, kill));
   }
 
@@ -196,8 +196,8 @@ async function handle(
     if (!isAdmin) return sendJson(res, 401, { error: "not authenticated" });
 
     if (path === "/api/admin/snapshot") {
-      await refreshWallet(cfg).catch(() => {});
-      return sendJson(res, 200, adminSnapshot(db, cfg, kill, await walletBalance(cfg)));
+      await refreshWallet(db, cfg).catch(() => {});
+      return sendJson(res, 200, adminSnapshot(db, cfg, kill, await walletBalance(db, cfg)));
     }
 
     if (path === "/api/admin/stream") {
@@ -426,12 +426,19 @@ function displayIp(req: IncomingMessage, cfg: Config): string {
  * must degrade the number shown, not break the dashboard, and capacity falls
  * back to the static cap when the balance is unknown.
  */
-async function walletBalance(cfg: Config): Promise<number | undefined> {
+async function walletBalance(db: Db, cfg: Config): Promise<number | undefined> {
   if (cfg.dryRun) return undefined;
   try {
     const { getBalanceSol } = await import("../chain/rpc.ts");
-    const { loadWallet } = await import("../chain/wallet.ts");
-    return await getBalanceSol(cfg, loadWallet(cfg).publicKey);
+    const { publishedWalletAddress } = await import("../chain/wallet.ts");
+    const { PublicKey } = await import("@solana/web3.js");
+    // Invariant 4: read the address the bot published, never resolve it from
+    // the secret here. An address is public information; the keypair it came
+    // from is not, and the secret-loading path caches that keypair inside
+    // whatever process calls it -- which would be this one.
+    const address = publishedWalletAddress(db);
+    if (!address) return undefined;
+    return await getBalanceSol(cfg, new PublicKey(address));
   } catch {
     return undefined;
   }

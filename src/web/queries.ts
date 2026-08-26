@@ -5,7 +5,7 @@ import { KillSwitch } from "../risk/killswitch.ts";
 import { buildCandidates, checkWarmup, historySpanMinutes } from "../scoring/score.ts";
 import { PublicKey } from "@solana/web3.js";
 import { computeCapacity } from "../risk/capacity.ts";
-import { configuredWalletAddress } from "../chain/wallet.ts";
+import { publishedWalletAddress } from "../chain/wallet.ts";
 import { compileFilters, checkTerm } from "../scoring/filters.ts";
 import { safeHttpUrl } from "../util/http.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
@@ -693,8 +693,8 @@ export function gateDetails(db: Db, cfg: Config, delayHours: number) {
  * Refresh the cached balance. Async, so the caller decides when to pay for it;
  * the snapshot readers stay synchronous and never block the SSE push loop.
  */
-export async function refreshWallet(cfg: Config): Promise<void> {
-  const address = configuredWalletAddress(cfg);
+export async function refreshWallet(db: Db, cfg: Config): Promise<void> {
+  const address = publishedWalletAddress(db);
   if (!address) return;
   if (Date.now() - walletCache.at < WALLET_TTL_MS) return;
   try {
@@ -706,8 +706,8 @@ export async function refreshWallet(cfg: Config): Promise<void> {
 }
 
 /** Synchronous read of whatever `refreshWallet` last fetched. */
-export function walletView(cfg: Config): WalletView {
-  const address = configuredWalletAddress(cfg);
+export function walletView(db: Db, cfg: Config): WalletView {
+  const address = publishedWalletAddress(db);
   if (!address) {
     return { address: null, balanceSol: null, explorerUrl: null, network: cfg.network };
   }
@@ -755,7 +755,7 @@ export function publicSnapshot(db: Db, cfg: Config, kill: KillSwitch) {
     launchesToday: headlineStats(db, cfg).launches24h,
     // Address and balance are already public on-chain; `web.showWallet` exists
     // so the operator can decline to advertise capacity anyway.
-    wallet: cfg.web.showWallet ? walletView(cfg) : null,
+    wallet: cfg.web.showWallet ? walletView(db, cfg) : null,
     // Runway is a wallet fact, so it is only known in live mode.
     capacityRunwayDays: cfg.risk.adaptive.enabled && !cfg.dryRun
       ? `${cfg.risk.adaptive.minRunwayDays}d` : null,
@@ -872,7 +872,7 @@ export function adminSnapshot(db: Db, cfg: Config, kill: KillSwitch, walletBalan
   return {
     capacity,
     // Admin always sees it, regardless of the public toggle.
-    wallet: walletView(cfg),
+    wallet: walletView(db, cfg),
     outcomes: outcomeSummary(db, cfg),
     recentOutcomes: settledOutcomes(db, cfg, 15).map((o) => ({
       term: o.term, symbol: o.symbol, score: o.score, verdict: o.verdict,

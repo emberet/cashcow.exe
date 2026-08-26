@@ -17,7 +17,7 @@ import { pinTokenMetadata } from "../assets/ipfs.ts";
 import { launchToken, estimateLaunchCostSol } from "../chain/launch.ts";
 import { claimCreatorFees } from "../chain/fees.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
-import { loadWallet } from "../chain/wallet.ts";
+import { loadWallet, publishWalletAddress } from "../chain/wallet.ts";
 import { openPosition } from "../positions/store.ts";
 import { evaluateOpenPositions } from "../positions/manager.ts";
 import { kvGet, kvSet } from "../util/db.ts";
@@ -97,6 +97,12 @@ export async function runLoop(
   let stopping = false;
 
   kill.installSignalHandlers(() => { stopping = true; });
+
+  // Publish the address for the dashboard. This process is the one that is
+  // allowed to hold the key, so it is the one that resolves the address --
+  // the web process reads it from the database and never loads the secret
+  // itself (invariant 4). No-op when no real wallet is configured.
+  publishWalletAddress(db, cfg);
 
   log.info("cashcow.exe started", {
     mode: cfg.dryRun ? "DRY RUN (no transactions)" : "LIVE",

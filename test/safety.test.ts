@@ -1,6 +1,6 @@
 import { test, describe, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import { compileFilters, checkTerm, checkAll } from "../src/scoring/filters.ts";
 import { evaluateSaturation, everLaunched, type KnownToken } from "../src/scoring/saturation.ts";
 import { similarity, tickerize, normalize } from "../src/util/text.ts";
 import { recoverCasing } from "../src/feeds/googleTrends.ts";
+import { publishWalletAddress, publishedWalletAddress } from "../src/chain/wallet.ts";
 
 const cfg = (over: Record<string, unknown> = {}) => configSchema.parse({ dryRun: false, ...over });
 
@@ -322,5 +323,60 @@ describe("text matching", () => {
     assert.equal(tickerize("labubu"), "LABUBU");
     assert.equal(tickerize("the great banana shortage"), "GBS");
     assert.match(tickerize("moo deng"), /^[A-Z0-9]{3,8}$/);
+  });
+});
+
+// ------------------------------------------------- invariant 4: key isolation
+
+describe("invariant 4 — the web process never holds the wallet key", () => {
+  // This regressed silently once: a helper called `configuredWalletAddress`
+  // looked like a pure address lookup, but it calls `loadWallet`, which parses
+  // the secret and caches the entire Keypair in the calling process. The result
+  // was a signing key living inside the request-serving process purely so the
+  // dashboard could print an address that is public information anyway.
+  //
+  // The address is now published to `kv` by the bot and read back from there.
+  // This test fails if anyone reintroduces a secret-loading call under src/web.
+  test("no module under src/web references a secret-loading wallet helper", () => {
+    const webDir = join(import.meta.dirname, "..", "src", "web");
+    const offenders: string[] = [];
+
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          // public/ is browser-side static assets, not the server process.
+          if (entry.name !== "public") walk(full);
+          continue;
+        }
+        if (!entry.name.endsWith(".ts")) continue;
+        const src = readFileSync(full, "utf8");
+        for (const banned of ["loadWallet", "walletPubkey", "configuredWalletAddress"]) {
+          if (src.includes(banned)) offenders.push(`${entry.name} -> ${banned}`);
+        }
+      }
+    };
+    walk(webDir);
+
+    assert.deepEqual(
+      offenders,
+      [],
+      `web process must read publishedWalletAddress(db) instead: ${offenders.join(", ")}`,
+    );
+  });
+
+  test("publishedWalletAddress returns null until the bot publishes one", () => {
+    const db = openMemoryDb();
+    assert.equal(publishedWalletAddress(db), null);
+  });
+
+  test("publishWalletAddress records nothing when no wallet is configured", () => {
+    const db = openMemoryDb();
+    // No secret env var and no keypairPath -> dry run's ephemeral throwaway
+    // keypair must NOT be published as though it were a real wallet.
+    const c = configSchema.parse({ dryRun: true, wallet: { secretEnv: "TEST_ABSENT_SECRET_ENV" } });
+    delete process.env.TEST_ABSENT_SECRET_ENV;
+    publishWalletAddress(db, c);
+    assert.equal(publishedWalletAddress(db), null);
   });
 });
