@@ -406,6 +406,41 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   letter-spacing: .05em; text-transform: uppercase; font-variant-numeric: tabular-nums;
 }
 
+/* ----------------------------------------------------------- social links */
+/* NOT named .panel -- that class sets display:none for tab panels and silently
+   hides anything else that borrows the name. */
+.social {
+  margin-top: 18px;
+  display: flex; align-items: center; justify-content: center;
+  flex-wrap: wrap; gap: 12px;
+}
+.social-label {
+  font-family: var(--display);
+  font-size: 15px;
+  color: var(--grey);
+}
+.social-link {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--display); font-size: 15px;
+  padding: 7px 15px;
+  background: var(--milk);
+  color: var(--ink);
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+  text-decoration: none;
+  transition: transform .08s ease, box-shadow .08s ease, background .08s ease;
+}
+.social-link svg { width: 17px; height: 17px; fill: currentColor; display: block; }
+.social-link:hover { background: var(--leaf); transform: translate(-2px, -2px); box-shadow: 5px 5px 0 var(--ink); }
+.social-link:active { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--ink); }
+.social-link:focus-visible { outline: 3px solid var(--pink); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .social-link { transition: none; }
+  .social-link:hover, .social-link:active { transform: none; }
+}
+
 /* ------------------------------------------------------------- admin shell */
 
 .shell { display: grid; grid-template-columns: 262px 1fr; min-height: 100vh; }
