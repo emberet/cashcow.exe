@@ -75,12 +75,27 @@ The UI is a neo-brutalist cartoon: hard ink borders, solid offset shadows, a cow
 that chews. Fonts (Bagel Fat One, Baloo 2) are **self-hosted** in
 `src/web/public/fonts` so the strict CSP holds and the dashboard works offline.
 
-Two surfaces on one port, with a hard boundary between them:
+Two surfaces, with a hard boundary between them:
 
 | | |
 |---|---|
-| `http://127.0.0.1:4600/` | **Public.** Read-only, plain-English, safe to show anyone. |
-| `http://127.0.0.1:4600/admin` | **Admin.** Password-gated controls. |
+| `https://cashcowexe.win` | **Public.** Read-only, plain-English, safe to show anyone. |
+| `http://127.0.0.1:4600/admin` | **Admin.** Password-gated controls, loopback only. |
+
+The public site is served by a **second web process** on `127.0.0.1:4601` running
+under `public.config.json` with `adminEnabled: false`, exposed through a
+Cloudflare named tunnel. The bot's own instance on `:4600` serves both surfaces
+and stays on loopback.
+
+That split is the whole security story, so it is worth being precise about it:
+on the public hostname `/admin`, `/api/admin/snapshot` and `/api/login` all
+return **404**. The admin surface is *absent* there, not password-guarded. The
+tunnel must never be pointed at `:4600` — see `docs/DECISIONS.md` §27.
+
+Neither server binds anything but loopback, so the tunnel is the only ingress;
+there is no port forwarding and no open firewall port. Three LaunchAgents keep
+it up across reboot: `com.cashcow.bot`, `com.cashcow.public`, and
+`com.cloudflare.cloudflared`.
 
 What the public page shows, top to bottom: a status header, the **chomp
 pipeline** (eight gates, each one clickable for its own detail), what it is
