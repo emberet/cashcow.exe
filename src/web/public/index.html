@@ -25,9 +25,20 @@
     <div class="hero-grid">
       <div class="hero-copy">
         <div class="bubble" id="hero-bubble">Moo. Warming up my nose…</div>
+        <!--
+          Deliberately does NOT say "before any gate that costs a lamport". That
+          phrasing read as though the checks themselves happen on-chain. They do
+          not: scoring, filters, dedupe and saturation all run locally, and the
+          only things that ever reach Solana are the launch, the dev buy, exits
+          and fee claims. It was also wrong about lamports specifically -- the
+          first paid steps are the naming call and the IPFS pin, which cost API
+          credits, not SOL.
+        -->
         <p>
-          Every gate that can say <em>no</em> for free runs before any gate that costs a
-          single lamport. Below is exactly where today's grass got chewed up and spat out.
+          The cheap checks come first: everything that can say <em>no</em> for free happens
+          right here, before a single step costs anything. Nothing is signed on-chain until a
+          trend has survived all of it. Below is exactly where today's grass got chewed up
+          and spat out.
         </p>
       </div>
       <div class="hero-cow">
