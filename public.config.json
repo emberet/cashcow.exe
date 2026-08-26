@@ -1,8 +1,15 @@
 // Config for the INTERNET-FACING dashboard instance.
 //
-// Layered on top of src/config/default.config.json via TRENDBOT_CONFIG, and
-// used only by `node src/cli.ts web` -- this process serves pages and never
+// Used only by `node src/cli.ts web` -- this process serves pages and never
 // runs the bot loop, so it starts no launches and signs nothing.
+//
+// LAYERING: default.config.json -> config.json -> this file (TRENDBOT_CONFIG).
+// config.json IS in the chain, so `network`, `dryRun` and the RPC endpoint are
+// inherited from it and this instance always reports the same chain the bot is
+// really signing against. Do not re-declare them here: a second copy would
+// drift, and the public page would advertise the wrong network. It also means
+// this file must never carry secrets -- it is tracked in git, config.json is
+// not, and the RPC URL has an API key in it.
 //
 // Run it as:
 //   TRENDBOT_CONFIG=public.config.json node src/cli.ts web

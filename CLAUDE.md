@@ -133,6 +133,19 @@ generated identity, because the ticker does not exist until the model has run.
 
 ## Gotchas
 
+- **An empty `ANTHROPIC_API_KEY` in the shell beats the real one in `.env`.**
+  `process.loadEnvFile()` never overwrites a variable that already exists, and
+  some terminals export the key as `""`. Invariant 8 then refuses to start on
+  mainnet with *"Live mainnet run without ANTHROPIC_API_KEY"* even though the
+  key is sitting in `.env`, correct. Present-but-empty is worse than absent. Run
+  `env -u ANTHROPIC_API_KEY node src/cli.ts <cmd>` to see what the bot sees. Do
+  not "fix" this by setting `filters.allowUnscreenedLive` — that disarms the
+  brand/likeness screen to paper over a shell quirk. The LaunchAgents are clean.
+- **`config.json` is in the *public* dashboard's config chain too.** Layering is
+  `default.config.json` → `config.json` → `TRENDBOT_CONFIG`. So the public page
+  inherits `network`/`dryRun`/RPC from `config.json` and always reports the chain
+  the bot really signs against. Do not re-declare those in `public.config.json`,
+  and never put the RPC URL there — it holds an API key and that file is tracked.
 - **`node:sqlite` returns null-prototype objects.** Fine to read, surprising to
   spread.
 - **Migrations are append-only** in `src/util/db.ts`. Never edit an existing one;

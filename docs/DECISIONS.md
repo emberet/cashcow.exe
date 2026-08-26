@@ -781,3 +781,50 @@ the config because `maxDailyLossSol` was still 5, above the new 2.5 ceiling —
 accident of the old, larger ceiling. Set to 1.5, so the day halts after losing
 60% of the allowance with room for the loss to be realised before the spend
 ceiling trips first and masks it.
+
+## 30. Going live on mainnet, and an empty env var that faked an invalid config
+
+`network` and `rpc.primary` were switched to mainnet **together**, per §28, with
+`launch.simulate: true` so the bot builds and simulates the real create+buy
+against mainnet without sending it. Simulation books to the pretend ledger via
+`isPretend()`, so it cannot consume the real daily allowance. `simulate` goes
+false only once a simulation has passed *and* the wallet holds SOL.
+
+Sizing was already done for a 0.2 SOL balance (§29 follow-on): dev buy 0.05,
+1 launch/day, 0.1 SOL/day ceiling, 0.06 SOL loss breaker. `capacity` confirms
+cost/launch 0.0768 SOL, which clears the 0.05 SOL `reserveSol` floor that is
+held back for exits and never spent on launches.
+
+**`config.json` is in the public dashboard's config chain.** The layering in
+`loadConfig()` is `default.config.json` → `config.json` → `TRENDBOT_CONFIG`, so
+`public.config.json` inherits `network`, `dryRun` and the RPC endpoint rather
+than declaring them. That is what keeps the public page from advertising a
+different chain than the bot signs against, and it is why that file — which is
+tracked in git, unlike `config.json` — must never carry the RPC URL: the API
+key is in it. The header comment there previously claimed it layered only on
+`default.config.json`, which was wrong and would have invited a duplicate,
+drifting copy of `network`.
+
+### The failure worth remembering
+
+Immediately after the switch, every CLI command died with *"Live mainnet run
+without `ANTHROPIC_API_KEY`"* — invariant 8 refusing to start. The key was
+present in `.env`, correctly spelled, 108 bytes of clean ASCII, and the loader
+reads `.env` before the config. The file was not the problem.
+
+`process.loadEnvFile()` **does not overwrite a variable that already exists in
+the environment**, and the interactive shell exported `ANTHROPIC_API_KEY` as an
+*empty string*. The empty value therefore won over the real one from `.env`,
+`Boolean("")` is false, and the gate fired. A present-but-empty variable is
+strictly worse than an absent one here: absent would have loaded correctly.
+
+The bot itself was never affected. Its LaunchAgent environment holds only
+`HOME`, `LOGNAME`, `PATH`, `SHELL`, `SSH_AUTH_SOCK`, `TMPDIR`, `USER` and the
+`XPC_*` pair — no shadow — so `.env` populates cleanly. This was a diagnostic
+artifact of the terminal, not a defect in the config or the deployment, and the
+distinction matters: the obvious "fix" of loosening invariant 8, or setting
+`filters.allowUnscreenedLive`, would have disabled a real brand/likeness
+safeguard to work around a shell quirk.
+
+To reproduce a CLI run the way the bot sees it: `env -u ANTHROPIC_API_KEY node
+src/cli.ts <cmd>`.
