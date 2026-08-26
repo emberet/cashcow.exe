@@ -35,12 +35,10 @@ export type BacktestOpts = {
   concurrency: number;
   /**
    * Holder-concentration reads go through Solana RPC, one request per mint.
-   * Sequential and rate-limited by design: verified live that the public
-   * mainnet endpoint (used automatically when `cfg.network` is not
-   * mainnet-beta -- see `mainnetConnectionFor`) starts returning HTTP 429
-   * within seconds at concurrency 5, and web3.js's own internal retry loop
-   * then churns for a very long time. A dedicated RPC could go faster; this
-   * stays conservative since the default is the free public endpoint.
+   * These defaults assume a DEDICATED endpoint; the pass is skipped entirely
+   * without one (the free public endpoint serves none of these reads, so
+   * issuing them would be minutes of retry backoff to learn nothing). Lower
+   * both if a provider's plan starts 429ing.
    */
   rpcConcurrency: number;
   rpcDelayMs: number;
@@ -52,8 +50,8 @@ export const DEFAULT_BACKTEST_OPTS: BacktestOpts = {
   daysAgoEnd: 30,
   maxPages: 60,
   concurrency: 5,
-  rpcConcurrency: 1,
-  rpcDelayMs: 300,
+  rpcConcurrency: 8,
+  rpcDelayMs: 50,
   thresholds: DEFAULT_THRESHOLDS,
 };
 

@@ -76,7 +76,7 @@ understanding what it was protecting against.
 ## Commands
 
 ```bash
-npm test                       # 133 tests — run before every commit
+npm test                       # 148 tests — run before every commit
 npx tsc --noEmit               # typecheck (no build step; Node strips types)
 
 npm run preflight              # verify every credential BY USING IT; nothing is signed
@@ -129,7 +129,7 @@ budget → *then* the model call, image render, and IPFS pin.
 - **`node:sqlite` returns null-prototype objects.** Fine to read, surprising to
   spread.
 - **Migrations are append-only** in `src/util/db.ts`. Never edit an existing one;
-  add the next. Currently at v6.
+  add the next. Currently at v7.
 - **`launch.simulate` builds the real transaction and simulates it.** Stronger
   evidence than `dryRun`, which never touches the chain. Both book against the
   pretend ledger via `isPretend()` — a simulation must never consume the real
