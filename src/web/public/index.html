@@ -182,12 +182,18 @@
     Icons are inline SVG rather than an icon font or CDN: img-src is 'self'
     data:, and the dashboard is meant to render with no network at all.
     rel="noopener noreferrer" on both; referrer-policy is already no-referrer.
+
+    The width/height ATTRIBUTES are load-bearing, not decoration. An inline
+    <svg> with a viewBox and no intrinsic size fills its container, so when a
+    visitor held a cached styles.css that predated the .social rules, each icon
+    rendered at 1228px and buried the footer. The CSS still sets the real size;
+    these are the floor if the stylesheet is stale or fails to load.
   -->
   <nav class="social" aria-label="Project links">
     <span class="social-label">Follow the herd</span>
     <a class="social-link" href="https://github.com/emberet/cashcow.exe"
        target="_blank" rel="noopener noreferrer">
-      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <svg width="17" height="17" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
           0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01
           1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95
@@ -200,7 +206,7 @@
     </a>
     <a class="social-link" href="https://x.com/cashcowEXE"
        target="_blank" rel="noopener noreferrer">
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99
           21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084
           4.126H5.117z"/>

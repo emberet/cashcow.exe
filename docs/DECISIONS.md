@@ -907,3 +907,61 @@ meant to release the lock.
 **Sleep.** `sudo pmset -c sleep 0` is applied — AC power shows `sleep 0`. Note
 that *battery* still shows `sleep 1`, so unplugging drops the site after a
 minute, and the lid caveat from §27 is unchanged.
+
+---
+
+## 32. Cloudflare cached the stylesheet but not the HTML, so new markup rendered against old CSS
+
+**Symptom, as reported:** "There is a sizing issue and it's missplaced" —
+minutes after the social links shipped to `cashcowexe.win`.
+
+**What was actually happening.** The origin sends `cache-control: no-cache` on
+every static file (`serveStatic`). Cloudflare's default Browser Cache TTL
+overrides that for static extensions and leaves HTML alone, which the response
+headers show plainly:
+
+```
+GET /            -> cache-control: no-cache      cf-cache-status: DYNAMIC
+GET /styles.css  -> cache-control: max-age=14400 cf-cache-status: EXPIRED
+GET /app.js      -> cache-control: max-age=14400
+```
+
+So `index.html` is always fresh and `styles.css` is up to four hours stale, at
+the edge *and* in the visitor's browser. A returning visitor got the new
+`nav.social` markup with a stylesheet that had never heard of `.social`.
+
+**Why that was not merely cosmetic.** An inline `<svg>` with a `viewBox` and no
+intrinsic size resolves to the width of its container. With the icon rule
+missing, each logo expanded to fill the column — measured at **1228x1228px**,
+turning the footer into a page-sized GitHub octocat. That is the "sizing issue"
+and the "misplaced", and it is one defect, not two.
+
+Reproduced deterministically rather than inferred: deleting every rule whose
+`cssText` contains `.social` from the live stylesheet and re-measuring gives
+`svgW: 1228, navH: 2541`.
+
+**Two fixes, because either alone leaves a hole.**
+
+1. **Content-hashed asset URLs.** `serveStatic` rewrites `/styles.css`,
+   `/app.js` and `/admin.js` references in served HTML to `?v=<sha256[:10]>`.
+   A stale copy is then never *requested*, and correctness stops depending on
+   an edge setting that lives outside this repo. A query string rather than a
+   renamed file, because the router keys on `url.pathname` — nothing has to be
+   rewritten on the way back in. Hashes are memoised for the process lifetime;
+   a deploy restarts it.
+2. **`width`/`height` attributes on the inline icons.** The CSS still sets the
+   real size, but the attributes are the floor when the stylesheet is stale or
+   fails to load entirely. This is the part that would have made the bug
+   invisible instead of spectacular.
+
+**On verification.** The first attempt at these links was shipped on structural
+checks alone — HTML nesting, balanced CSS braces, no `display:none` collision —
+because no headless browser was to hand. Every one of those checks passed on a
+page that was visibly broken, because none of them modelled a visitor whose
+cache disagreed with the server. Structural checks cannot see a layout; the
+defect was found by rendering the page and measuring the icons.
+
+**Test.** `test/web-assets.test.ts` asserts the versioning rewrite, that the
+version is derived from real file bytes, that no asset referenced by a page is
+missing from `VERSIONED_ASSETS`, and that both social icons carry explicit
+dimensions. The last one was verified to fail against the pre-fix markup.

@@ -371,6 +371,51 @@ function securityHeaders(res: ServerResponse): void {
   res.setHeader("permissions-policy", "geolocation=(), microphone=(), camera=()");
 }
 
+/**
+ * Assets referenced by the HTML, whose URLs get a content hash appended.
+ *
+ * The origin sends `cache-control: no-cache` on everything, but Cloudflare's
+ * default Browser Cache TTL overrides that for static extensions and hands
+ * visitors a 4-hour TTL on `.css`/`.js` while leaving `.html` uncached. So the
+ * browser can hold NEW markup against OLD styles for hours, which is not a
+ * cosmetic problem: `nav.social`'s inline `<svg>` has a viewBox and no
+ * intrinsic size, so with its rule missing each icon expanded to fill the
+ * column -- a 1228px GitHub logo below the disclaimer. Measured, not guessed.
+ *
+ * Appending the hash makes the URL change whenever the bytes change, so a
+ * stale copy is never *requested*, and correctness stops depending on an edge
+ * setting we do not control from this repo. Deliberately a query string and
+ * not a renamed file: `serveStatic` still resolves the real path because the
+ * router keys on `url.pathname` (see `handle`), so there is nothing to rewrite
+ * on the way back in.
+ */
+export const VERSIONED_ASSETS = ["/styles.css", "/app.js", "/admin.js"] as const;
+
+/** Hashes are stable for the life of the process; a deploy restarts it. */
+const assetVersions = new Map<string, string>();
+
+async function assetVersion(urlPath: string): Promise<string> {
+  const cached = assetVersions.get(urlPath);
+  if (cached !== undefined) return cached;
+  let version = "0"; // missing asset: emit a stable marker rather than throwing
+  try {
+    const bytes = await readFile(join(PUBLIC_DIR, urlPath.slice(1)));
+    version = createHash("sha256").update(bytes).digest("hex").slice(0, 10);
+  } catch { /* fall through to "0" */ }
+  assetVersions.set(urlPath, version);
+  return version;
+}
+
+export async function versionAssetUrls(html: string): Promise<string> {
+  let out = html;
+  for (const asset of VERSIONED_ASSETS) {
+    const quoted = `"${asset}"`;
+    if (!out.includes(quoted)) continue;
+    out = out.replaceAll(quoted, `"${asset}?v=${await assetVersion(asset)}"`);
+  }
+  return out;
+}
+
 async function serveStatic(res: ServerResponse, file: string): Promise<void> {
   // Resolve inside PUBLIC_DIR and verify containment, so "../" cannot escape.
   const target = resolve(join(PUBLIC_DIR, normalize(file)));
@@ -382,7 +427,10 @@ async function serveStatic(res: ServerResponse, file: string): Promise<void> {
     const info = await stat(target);
     if (!info.isFile()) return sendJson(res, 404, { error: "not found" });
 
-    const body = await readFile(target);
+    let body = await readFile(target);
+    if (extname(target) === ".html") {
+      body = Buffer.from(await versionAssetUrls(body.toString("utf8")), "utf8");
+    }
     res.writeHead(200, {
       "content-type": MIME[extname(target)] ?? "application/octet-stream",
       "content-length": body.length,

@@ -76,7 +76,7 @@ understanding what it was protecting against.
 ## Commands
 
 ```bash
-npm test                       # 174 tests — run before every commit
+npm test                       # 178 tests — run before every commit
 npx tsc --noEmit               # typecheck (no build step; Node strips types)
 
 npm run preflight              # verify every credential BY USING IT; nothing is signed
@@ -176,6 +176,15 @@ generated identity, because the ticker does not exist until the model has run.
   styles, so there is no way around it) — keep `script-src` strict.
 - **`[hidden]` needs `!important`** in `styles.css`; any class setting an explicit
   `display` beats the UA rule and the element stays visible.
+- **Cloudflare caches `styles.css`/`app.js` for 4h but not the HTML.** The origin
+  says `no-cache` on everything; the edge overrides it for static extensions
+  only. So markup and stylesheet can disagree in a visitor's browser for hours.
+  `serveStatic` appends `?v=<content hash>` to asset URLs to close this — any
+  new asset a page references must be added to `VERSIONED_ASSETS`.
+- **Give every inline `<svg>` `width`/`height` attributes.** With a `viewBox` and
+  no intrinsic size it fills its container: one icon rendered at 1228px when a
+  cached stylesheet lacked its rule. CSS sets the real size; the attributes are
+  the floor. See `docs/DECISIONS.md` §32.
 - **`signals.term` is the extracted PHRASE; `signals.source_text` is the
   source's own words.** Scoring compares phrases; anything shown to a reader
   should use `source_text`, or it renders fragments like "Former Illinois".

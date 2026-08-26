@@ -431,10 +431,21 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   text-decoration: none;
   transition: transform .08s ease, box-shadow .08s ease, background .08s ease;
 }
-.social-link svg { width: 17px; height: 17px; fill: currentColor; display: block; }
+/* flex: none so the icon cannot be squeezed by a long label at narrow widths.
+   The matching width/height attributes in the markup are the fallback for a
+   stale stylesheet -- see the comment above nav.social in index.html. */
+.social-link svg { width: 17px; height: 17px; flex: none; fill: currentColor; display: block; }
 .social-link:hover { background: var(--leaf); transform: translate(-2px, -2px); box-shadow: 5px 5px 0 var(--ink); }
 .social-link:active { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--ink); }
 .social-link:focus-visible { outline: 3px solid var(--pink); outline-offset: 2px; }
+
+/* At phone widths the row wraps after "Follow the herd · Source", stranding
+   @cashcowEXE alone on a second line. Giving the label its own full-width row
+   keeps the two pills paired -- they measure 283px together, which clears a
+   375px viewport minus the 15px .wrap padding. */
+@media (max-width: 640px) {
+  .social-label { flex-basis: 100%; text-align: center; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .social-link { transition: none; }
