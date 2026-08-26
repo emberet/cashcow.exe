@@ -452,6 +452,37 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   .social-link:hover, .social-link:active { transform: none; }
 }
 
+/* -------------------------------------------------------- analogy popup */
+/* Toggled via the [hidden] attribute (already !important in this stylesheet,
+   see the .panel gotcha in CLAUDE.md) -- never via a display-setting class. */
+.popup-backdrop {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(26, 26, 26, .55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.popup {
+  max-width: 480px;
+  width: 100%;
+  position: relative;
+  background: var(--sky);
+}
+.popup .cardtitle { margin: 0 34px 10px 0; font-size: 21px; }
+.popup p { margin: 0 0 10px; font-weight: 600; font-size: 15.5px; }
+.popup p:last-child { margin-bottom: 0; }
+.popup-close {
+  position: absolute; top: 14px; right: 14px;
+  width: 32px; height: 32px; padding: 0;
+  border-radius: 50%;
+  font-family: var(--display); font-size: 18px; line-height: 1;
+}
+@media (max-width: 640px) {
+  .popup { max-width: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .popup-close { transition: none; }
+}
+
 /* ------------------------------------------------------------- admin shell */
 
 .shell { display: grid; grid-template-columns: 262px 1fr; min-height: 100vh; }

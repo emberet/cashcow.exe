@@ -80,3 +80,53 @@ describe("stale-stylesheet hardening", () => {
     }
   });
 });
+
+/**
+ * The "what the cow does" popup shows once per browser (localStorage) and is
+ * reopenable via a topbar button. It must render hidden by default: if the
+ * `hidden` attribute is ever dropped from the markup, every first-time
+ * visitor gets an un-dismissable-looking overlay before app.js even runs.
+ *
+ * Also guards the economics claim in the copy against schema drift. The
+ * splits it quotes (40 holders / 50 operator / 10 raffle) come from
+ * `distributionSchema` in `src/config/schema.ts` and are explicitly
+ * accounting-only there -- no token, no recipient list, no payout mechanism.
+ * If a future change edits those numbers without updating this popup, the
+ * dashboard would state a split that no longer matches the schema default.
+ */
+describe("analogy popup", () => {
+  test("is hidden by default in the served markup", async () => {
+    const html = await readFile(join(PUBLIC_DIR, "index.html"), "utf8");
+    const popup = html.match(/<div class="popup-backdrop"[^>]*>/)?.[0];
+    assert.ok(popup, "popup-backdrop is missing from index.html");
+    assert.match(popup, /\bhidden\b/, `popup must ship hidden: ${popup}`);
+  });
+
+  test("has a close control and is not the only place the disclaimer appears", async () => {
+    const html = await readFile(join(PUBLIC_DIR, "index.html"), "utf8");
+    assert.match(html, /id="analogy-close"/, "no close button in the popup");
+    assert.match(html, /id="p-analogy"/, "no way to reopen the popup once dismissed");
+
+    // The popup echoes the disclaimer rather than replacing it -- confirm the
+    // full disclaimer card still exists independently of the popup's summary.
+    assert.match(html, /class="disclaimer"/, "the full disclaimer card is missing");
+  });
+
+  test("the quoted split matches the schema default, so the two cannot drift", async () => {
+    const { configSchema } = await import("../src/config/schema.ts");
+    const splits = configSchema.parse({}).distribution.splits;
+    const pct = (label: string) => splits.find((s) => s.label === label)?.pct;
+
+    const html = await readFile(join(PUBLIC_DIR, "index.html"), "utf8");
+    const raw = html.match(/<div class="popup-backdrop"[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
+    // Collapse markup whitespace/line-wrapping so the copy can be reflowed in
+    // the HTML without breaking these assertions on incidental line breaks.
+    const popup = raw.replace(/\s+/g, " ");
+
+    assert.equal(pct("operator"), 50);
+    assert.match(popup, /half stays with me/i);
+    assert.equal(pct("token holders (future)"), 40);
+    assert.match(popup, /40%/);
+    assert.match(popup, /not live yet/i, "must not imply the holder split is active");
+  });
+});

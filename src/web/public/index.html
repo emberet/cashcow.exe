@@ -10,6 +10,36 @@
 </head>
 <body>
 
+<!--
+  Shown once per browser (localStorage, see app.js) and reopenable any time
+  via #p-analogy in the topbar. [hidden] is the toggle, not a class -- this
+  stylesheet already gives [hidden] !important, and a class-based display
+  would silently lose that fight (see CLAUDE.md gotchas).
+
+  Numbers here match src/config/schema.ts's distribution.splits defaults
+  (40 token holders / 50 operator / 10 raffle) but that feature is
+  accounting-only and off (distribution.enabled: false everywhere in this
+  deployment's config chain) -- no token, no recipient list, no payout
+  mechanism exists yet. The copy says so plainly rather than implying a live
+  entitlement, consistent with the disclaimer card lower on this page.
+-->
+<div class="popup-backdrop" id="analogy-backdrop" hidden>
+  <div class="card popup" role="dialog" aria-modal="true" aria-labelledby="analogy-title">
+    <button type="button" class="popup-close" id="analogy-close" aria-label="Close">&times;</button>
+    <h4 id="analogy-title" class="cardtitle">Moo! Here's the deal.</h4>
+    <p>
+      I graze the internet for a trend before anyone else smells it, and once
+      it clears every gate that costs nothing, I mint it into a coin. Whatever
+      milk (creator fees) that coin makes gets split three ways: half stays
+      with me for hay, RPC bills and the late nights that keep the barn
+      running; 40% is penciled in for holders once a real payout pipe exists
+      &mdash; <strong>not live yet</strong>, no token, no claim, nothing to
+      promise; the rest funds a weekly raffle.
+    </p>
+    <p class="note">Silly experiment, not investment advice &mdash; full disclaimer further down this page.</p>
+  </div>
+</div>
+
 <div class="topbar">
   <div class="inner">
     <span class="wordmark">cashcow.exe</span>
@@ -17,6 +47,7 @@
     <span class="pill sky" id="p-network">devnet</span>
     <span class="pill leaf" id="p-status">MUNCHING <span class="blinker"></span></span>
     <span class="pill num" id="p-countdown">next sniff —</span>
+    <button type="button" class="pill" id="p-analogy">the pitch 🐄</button>
   </div>
 </div>
 
