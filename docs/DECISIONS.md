@@ -520,3 +520,43 @@ only the legitimate `scoring.threshold` was accepted.**
 
 This is the payoff for §9: the mandate is an allowlist in code, not an
 instruction in a prompt. A prompt would have been argued with.
+
+---
+
+## 24. The admin password lives in the database, with `.env` as the bootstrap
+
+**Context.** The portal had exactly one password field — the login box. Rotating
+the password meant running the CLI, copying a hash, and hand-editing `.env`.
+Asked for a reset panel, the honest answer was that an *unauthenticated* one
+hands the portal to anyone who can reach `/admin`. What was built is the version
+that belongs in a portal: change password, current password required, behind an
+existing session and CSRF token.
+
+**The actual design problem was storage, not UI.** `authState`, `login` and
+`validateSession` all read `process.env.ADMIN_PASSWORD_HASH` at call time. A
+browser cannot durably change an environment variable, and rewriting the
+operator's `.env` from a request handler is invasive and easy to corrupt.
+
+**Decision.** Store the rotated hash in the existing `kv` table;
+`ADMIN_PASSWORD_HASH` is the bootstrap credential and `kv` wins when present. No
+migration — `kv` has existed since v1. A scrypt hash there is no worse than the
+session-token hashes already stored alongside it, and because every reader hits
+the store on each call, a rotation takes effect with no restart.
+
+**The sharp edge, and the mitigation.** Once an override exists, editing `.env`
+silently does nothing — an excellent way to lock yourself out while believing
+you fixed it. So: `admin-password --save` writes straight to `kv`,
+`--clear` drops the override, `authState` names the source it is complaining
+about, and the CLI refuses to print a hash line that a live override would make
+a no-op without saying so.
+
+**Rotation revokes every session, including the caller's.** "Someone else has a
+session I did not authorise" is a primary reason to change a password; a
+rotation that left other sessions alive would miss the point.
+
+**Two smaller things fixed on the way.** The change endpoint gets its own
+throttle bucket, separate from login — the session is what authorises the call,
+but `verifyPassword` at N=2¹⁷ is ~200ms of CPU, so an authenticated client could
+otherwise pin a core by hammering it. And the CLI prompt now refuses a
+non-TTY stdin: on EOF the prompt never resolved and the process exited 0 having
+done nothing, which under `--save` was indistinguishable from success.

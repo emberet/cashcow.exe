@@ -57,7 +57,19 @@ links for whatever is missing.
 npm run admin-password        # generate ADMIN_PASSWORD_HASH, paste into .env
 npm run web                   # dashboard only (reads the same database)
 node src/cli.ts run --web     # bot + dashboard in one process
+
+node src/cli.ts admin-password --save   # store the password directly instead;
+                                        # takes effect at once, no restart, and
+                                        # is the way back in after a lockout
+node src/cli.ts admin-password --clear  # drop that override; .env governs again
 ```
+
+Once signed in, the password can also be changed from the portal itself (Barn
+log → *Change the barn key*), which requires the current password and signs out
+every session including your own. Both paths write the hash to the database,
+where it **overrides `ADMIN_PASSWORD_HASH`** — so after a rotation, editing
+`.env` does nothing until you run `--clear`. The CLI and the portal both say
+which source is in effect.
 
 The UI is a neo-brutalist cartoon: hard ink borders, solid offset shadows, a cow
 that chews. Fonts (Bagel Fat One, Baloo 2) are **self-hosted** in

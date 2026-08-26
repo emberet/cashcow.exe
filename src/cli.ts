@@ -14,7 +14,14 @@ import { evaluateOpenPositions } from "./positions/manager.ts";
 import { claimCreatorFees, creatorVaultBalanceSol } from "./chain/fees.ts";
 import { listStuck } from "./positions/store.ts";
 import { startWebServer } from "./web/server.ts";
-import { hashPassword, authState } from "./web/auth.ts";
+import {
+  hashPassword,
+  authState,
+  storedHash,
+  setStoredPassword,
+  clearStoredPassword,
+  MIN_PASSWORD_LENGTH,
+} from "./web/auth.ts";
 import { createInterface } from "node:readline/promises";
 import { computeCapacity, balanceNeededFor, costPerLaunch } from "./risk/capacity.ts";
 import { outcomeSummary, settledOutcomes, refreshOutcomes } from "./learning/outcomes.ts";
@@ -38,7 +45,11 @@ cashcow.exe -- trend detection to pump.fun launcher
   score                 Poll, ingest, and print ranked launch candidates
   run [--dry-run] [--once] [--web]   Main loop; --web also serves the dashboard
   web                   Serve the dashboard and admin portal only
-  admin-password        Generate an ADMIN_PASSWORD_HASH for .env
+  admin-password [--save] [--clear]
+                        Set the admin password. Default prints an
+                        ADMIN_PASSWORD_HASH line for .env; --save stores it in
+                        the database instead (takes effect immediately, no
+                        restart); --clear drops that override so .env wins again
   positions             Show open and recent dev positions
   budget                Show the rolling 24h spend/launch/loss picture
   fees [--claim]        Show, and optionally claim, pump.fun creator fees
@@ -176,7 +187,7 @@ async function main() {
       }
       console.log("\n  checking each credential by using it, not by testing it is non-empty\n");
       const forMainnet = flags.get("for-mainnet") === true;
-      const results = await runPreflight(cfg, forMainnet);
+      const results = await runPreflight(db, cfg, forMainnet);
       const mark = { ok: "  ok  ", warn: " warn ", fail: " FAIL " };
       for (const r of results) {
         console.log(`  [${mark[r.status]}] ${r.name.padEnd(24)} ${r.detail}`);
@@ -315,7 +326,7 @@ async function main() {
     case "web": {
       const srv = await startWebServer(db, cfg, kill);
       console.log(`\n  dashboard  ${srv.url}/`);
-      console.log(`  admin      ${srv.url}/admin  ${authState().configured ? "" : "(disabled - no password set)"}`);
+      console.log(`  admin      ${srv.url}/admin  ${authState(db).configured ? "" : "(disabled - no password set)"}`);
       console.log("\n  Ctrl-C to stop.\n");
       await new Promise<void>((r) => {
         process.on("SIGINT", () => { void srv.close().then(r); });
@@ -325,17 +336,58 @@ async function main() {
     }
 
     case "admin-password": {
+      // --clear drops the stored override so ADMIN_PASSWORD_HASH governs again.
+      // Needed because once a hash is saved to the database, editing .env has
+      // no effect -- which is a confusing way to lock yourself out.
+      if (flags.has("clear")) {
+        clearStoredPassword(db);
+        const after = storedHash(db);
+        console.log("\n  Stored password cleared.");
+        console.log(after.source === "env"
+          ? "  ADMIN_PASSWORD_HASH from the environment is now in effect.\n"
+          : "  No password is set anywhere, so the admin portal is now DISABLED.\n");
+        break;
+      }
+
       // Read from a TTY prompt so the password never lands in shell history.
+      // Refuse a pipe explicitly: on EOF the prompt simply never resolves and
+      // the process exits 0 having done nothing, which with --save looks
+      // exactly like success. Say so rather than silently not saving.
+      if (!process.stdin.isTTY) {
+        console.log("\n  This command needs an interactive terminal: it prompts for the");
+        console.log("  password so it never appears in an argument or in shell history.");
+        console.log("  Run it directly in a terminal, not through a pipe or a script.\n");
+        process.exitCode = 1; break;
+      }
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       const pw = await rl.question("New admin password: ");
       const again = await rl.question("Confirm: ");
       rl.close();
 
       if (pw !== again) { console.log("\n  Passwords do not match.\n"); process.exitCode = 1; break; }
-      if (pw.length < 12) { console.log("\n  Use at least 12 characters.\n"); process.exitCode = 1; break; }
+      if (pw.length < MIN_PASSWORD_LENGTH) {
+        console.log(`\n  Use at least ${MIN_PASSWORD_LENGTH} characters.\n`);
+        process.exitCode = 1; break;
+      }
+
+      // --save writes straight to the database: no .env editing, and it takes
+      // effect immediately. This is the way back in after a lockout.
+      if (flags.has("save")) {
+        setStoredPassword(db, pw);
+        console.log("\n  Password saved. It takes effect immediately — no restart needed.");
+        console.log("  It overrides ADMIN_PASSWORD_HASH; run `admin-password --clear` to undo.");
+        console.log("  The password itself is not stored anywhere. Keep it in a password manager.\n");
+        break;
+      }
 
       console.log("\n  Add this line to your .env file:\n");
       console.log(`ADMIN_PASSWORD_HASH=${hashPassword(pw)}\n`);
+      // Without this warning the printed line would be a silent no-op.
+      if (storedHash(db).source === "db") {
+        console.log("  WARNING: a password saved in the database is currently overriding");
+        console.log("  ADMIN_PASSWORD_HASH, so the line above will have NO EFFECT until you");
+        console.log("  run `node src/cli.ts admin-password --clear` (or use --save instead).\n");
+      }
       console.log("  The password itself is not stored anywhere. Keep it in a password manager.\n");
       break;
     }

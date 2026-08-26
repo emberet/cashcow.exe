@@ -222,6 +222,31 @@
             <button class="pink" id="btn-revoke">SIGN OUT EVERYWHERE</button>
           </div>
         </div>
+
+        <div class="card" style="margin-top:18px">
+          <h4 class="cardtitle" style="margin-bottom:4px">Change the barn key</h4>
+          <p class="note" style="margin:0 0 12px">
+            Takes effect immediately and signs out every session, including this one — so
+            a stolen session dies with the old password. The new password is stored in the
+            database and overrides <code>ADMIN_PASSWORD_HASH</code>; run
+            <code>node src/cli.ts admin-password --clear</code> to hand control back to
+            the environment.
+          </p>
+          <div id="pw-msg"></div>
+          <form id="pw-form" autocomplete="on">
+            <div style="display:grid;gap:10px;max-width:420px">
+              <input type="password" id="pw-current" placeholder="Current password"
+                     autocomplete="current-password" required>
+              <input type="password" id="pw-next" placeholder="New password (12+ characters)"
+                     autocomplete="new-password" minlength="12" required>
+              <input type="password" id="pw-confirm" placeholder="New password again"
+                     autocomplete="new-password" minlength="12" required>
+            </div>
+            <div class="btnrow" style="margin-top:14px">
+              <button type="submit" class="leaf" id="pw-btn">CHANGE PASSWORD</button>
+            </div>
+          </form>
+        </div>
       </div>
 
       <!-- --------------------------------------------------------- fences -->

@@ -1,6 +1,7 @@
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import type { Config } from "../config/schema.ts";
 import { configuredWalletAddress } from "../chain/wallet.ts";
+import type { Db } from "../util/db.ts";
 import { authState } from "../web/auth.ts";
 import { httpFetch } from "../util/http.ts";
 import { redactEndpoint } from "../chain/rpc.ts";
@@ -158,7 +159,7 @@ async function checkWallet(cfg: Config): Promise<CheckResult[]> {
 }
 
 /** Config combinations that decide how much can be lost. */
-function checkPosture(cfg: Config): CheckResult[] {
+function checkPosture(db: Db, cfg: Config): CheckResult[] {
   const out: CheckResult[] = [];
   const live = !cfg.dryRun && cfg.network === "mainnet-beta";
 
@@ -175,7 +176,7 @@ function checkPosture(cfg: Config): CheckResult[] {
     ? WARN("Daily ceiling", `${perDay} SOL/day is a large first exposure`)
     : OK("Daily ceiling", `${perDay} SOL/day, ${cfg.risk.maxLaunchesPerDay} launches`));
 
-  const auth = authState();
+  const auth = authState(db);
   out.push(auth.configured
     ? OK("Admin portal", "password configured")
     : WARN("Admin portal", "disabled — no ADMIN_PASSWORD_HASH", "npm run admin-password"));
@@ -195,14 +196,14 @@ function checkPosture(cfg: Config): CheckResult[] {
  *                    whether you are ready, because startup refuses mainnet
  *                    until the very keys you are checking for are present.
  */
-export async function runPreflight(cfg: Config, forMainnet = false): Promise<CheckResult[]> {
+export async function runPreflight(db: Db, cfg: Config, forMainnet = false): Promise<CheckResult[]> {
   const [anthropic, pinata, rpc, wallet] = await Promise.all([
     checkAnthropic(cfg, forMainnet),
     checkPinata(cfg, forMainnet),
     checkRpc(cfg, forMainnet),
     checkWallet(cfg),
   ]);
-  const posture = checkPosture(cfg);
+  const posture = checkPosture(db, cfg);
   if (forMainnet && cfg.network !== "mainnet-beta") {
     posture.unshift(WARN("Target",
       `judging readiness for MAINNET while config says ${cfg.network}`));

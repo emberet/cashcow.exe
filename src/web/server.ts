@@ -11,6 +11,7 @@ import { publicSnapshot, adminSnapshot, refreshWallet } from "./queries.ts";
 import {
   authState, login, logout, validateSession, readCookie, cookieHeader,
   clearCookieHeader, csrfToken, checkCsrf, auditAction, sessionCount, revokeAllSessions,
+  changePassword,
 } from "./auth.ts";
 import { enqueue, COMMAND_KINDS, type CommandKind } from "./commands.ts";
 import { log, errFields } from "../util/log.ts";
@@ -100,7 +101,7 @@ export function startWebServer(db: Db, cfg: Config, kill: KillSwitch): Promise<W
     server.once("error", reject);
     server.listen(cfg.web.port, cfg.web.host, () => {
       const url = `http://${cfg.web.host}:${cfg.web.port}`;
-      const auth = authState();
+      const auth = authState(db);
 
       log.info("dashboard listening", {
         url,
@@ -176,7 +177,7 @@ async function handle(
   }
 
   if (path === "/api/session") {
-    const auth = authState();
+    const auth = authState(db);
     return sendJson(res, 200, {
       configured: auth.configured,
       reason: auth.configured ? null : auth.reason,
@@ -199,7 +200,7 @@ async function handle(
 
   // ----------------------------------------------------------------- admin
   if (path.startsWith("/api/admin")) {
-    const auth = authState();
+    const auth = authState(db);
     if (!auth.configured) return sendJson(res, 503, { error: auth.reason });
     if (!isAdmin) return sendJson(res, 401, { error: "not authenticated" });
 
@@ -253,6 +254,31 @@ async function handle(
         });
       }
 
+      case "/api/admin/password": {
+        // Authorised by the session above; the throttle inside changePassword
+        // is a CPU guard, not an auth control. Keys on the socket address.
+        const result = changePassword(
+          db,
+          typeof body.current === "string" ? body.current : "",
+          typeof body.next === "string" ? body.next : "",
+          typeof body.confirm === "string" ? body.confirm : "",
+          throttleKey,
+        );
+
+        if (!result.ok) {
+          // The reason is safe to record -- it never contains the password.
+          auditAction(db, "password_change_failed", result.reason, ip);
+          return sendJson(res, result.status, {
+            error: result.reason, retryAfterMs: result.retryAfterMs,
+          });
+        }
+
+        auditAction(db, "password_changed", "admin password rotated", ip);
+        // Every session is gone, including this one, so drop the cookie too.
+        res.setHeader("set-cookie", clearCookieHeader(secureCookies));
+        return sendJson(res, 200, { ok: true, signedOut: true });
+      }
+
       case "/api/admin/revoke-sessions": {
         const n = revokeAllSessions(db);
         auditAction(db, "revoke_sessions", `revoked ${n}`, ip);
@@ -268,7 +294,7 @@ async function handle(
   if (path === "/api/health") {
     return sendJson(res, 200, {
       ok: true,
-      adminConfigured: authState().configured,
+      adminConfigured: authState(db).configured,
       sessions: sessionCount(db),
       publicEnabled: cfg.web.publicEnabled,
     });

@@ -1,10 +1,14 @@
-import { test, describe, beforeEach } from "node:test";
+import { test, describe, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { configSchema } from "../src/config/schema.ts";
-import { openMemoryDb, type Db } from "../src/util/db.ts";
+import { openMemoryDb, kvSet, type Db } from "../src/util/db.ts";
 import { safeHttpUrl } from "../src/util/http.ts";
-import { login, hashPassword, isLegacyHash } from "../src/web/auth.ts";
+import {
+  login, hashPassword, isLegacyHash, authState, validateSession,
+  storedHash, setStoredPassword, clearStoredPassword, changePassword,
+  __resetThrottle,
+} from "../src/web/auth.ts";
 import { scryptSync } from "node:crypto";
 import { readingList } from "../src/web/queries.ts";
 import { applyChanges } from "../src/learning/guardrails.ts";
@@ -153,6 +157,105 @@ describe("password hash parameter versioning", () => {
     process.env.ADMIN_PASSWORD_HASH =
       `scrypt$999999999$8$1$${"aa".repeat(16)}$${"bb".repeat(64)}`;
     assert.equal(login(openMemoryDb(), "anything", "5.0.0.5").ok, false);
+  });
+});
+
+// ==================================================================
+// Rotating the password from the portal.
+// The hash lives in `kv` and OVERRIDES ADMIN_PASSWORD_HASH, which is a sharp
+// edge: once an override exists, editing .env silently does nothing. These
+// tests pin the precedence, the escape hatch, and the rule that a rotation
+// kills every session including the one that asked for it.
+// ==================================================================
+
+describe("admin password rotation", () => {
+  const ENV_PASSWORD = "bootstrap-from-env";
+  const NEW_PASSWORD = "rotated-in-the-portal";
+  // Hashing at N=2^17 is deliberately slow, so pay for it once for the suite.
+  const envHash = hashPassword(ENV_PASSWORD);
+  const before = process.env.ADMIN_PASSWORD_HASH;
+
+  let db: Db;
+  beforeEach(() => {
+    db = openMemoryDb();
+    process.env.ADMIN_PASSWORD_HASH = envHash;
+    __resetThrottle();
+  });
+  after(() => {
+    if (before === undefined) delete process.env.ADMIN_PASSWORD_HASH;
+    else process.env.ADMIN_PASSWORD_HASH = before;
+  });
+
+  test("the DB overrides the environment, and --clear hands it back", () => {
+    assert.deepEqual(storedHash(db), { hash: envHash, source: "env" });
+
+    setStoredPassword(db, NEW_PASSWORD);
+    const rotated = storedHash(db);
+    assert.equal(rotated.source, "db");
+    assert.notEqual(rotated.hash, envHash);
+
+    clearStoredPassword(db);
+    assert.deepEqual(storedHash(db), { hash: envHash, source: "env" },
+      "clearing the override must restore .env, not lock the operator out");
+  });
+
+  test("a rotated password logs in and the old one stops working", () => {
+    setStoredPassword(db, NEW_PASSWORD);
+    assert.equal(login(db, NEW_PASSWORD, "7.0.0.1").ok, true);
+    assert.equal(login(db, ENV_PASSWORD, "7.0.0.2").ok, false,
+      "the superseded env password must not still open the portal");
+  });
+
+  test("a DB-only hash is enough; the env var need not exist at all", () => {
+    delete process.env.ADMIN_PASSWORD_HASH;
+    assert.equal(authState(db).configured, false, "default deny with no hash anywhere");
+
+    setStoredPassword(db, NEW_PASSWORD);
+    assert.equal(authState(db).configured, true);
+    assert.equal(storedHash(db).source, "db");
+  });
+
+  test("changing the password revokes every session, including the caller's", () => {
+    const session = login(db, ENV_PASSWORD, "7.0.0.3");
+    assert.equal(session.ok, true);
+    const token = session.ok ? session.token : "";
+    assert.equal(validateSession(db, token), true);
+
+    const res = changePassword(db, ENV_PASSWORD, NEW_PASSWORD, NEW_PASSWORD, "7.0.0.3");
+    assert.equal(res.ok, true);
+    assert.equal(validateSession(db, token), false,
+      "a rotation exists to evict whoever stole a session -- the caller included");
+    assert.equal(login(db, NEW_PASSWORD, "7.0.0.4").ok, true);
+  });
+
+  test("the current password is required, and the new one is checked", () => {
+    assert.equal(changePassword(db, "wrong", NEW_PASSWORD, NEW_PASSWORD, "7.0.0.5").ok, false);
+    // Nothing was written, so the original password still works.
+    assert.equal(storedHash(db).source, "env");
+
+    const mismatch = changePassword(db, ENV_PASSWORD, NEW_PASSWORD, "something-else", "7.0.0.6");
+    assert.equal(mismatch.ok, false);
+
+    const short = changePassword(db, ENV_PASSWORD, "short", "short", "7.0.0.7");
+    assert.equal(short.ok, false);
+    assert.match(short.ok === false ? short.reason : "", /at least 12/);
+
+    const same = changePassword(db, ENV_PASSWORD, ENV_PASSWORD, ENV_PASSWORD, "7.0.0.8");
+    assert.equal(same.ok, false);
+
+    assert.equal(storedHash(db).source, "env", "no rejected attempt may write a hash");
+  });
+
+  test("a malformed value in the DB is rejected, not thrown on", () => {
+    // Same failure mode as a malformed env var: report it, stay closed, and
+    // say WHICH source is broken so it is diagnosable rather than mysterious.
+    kvSet(db, "admin_password_hash", "not-a-hash");
+    const state = authState(db);
+    assert.equal(state.configured, false);
+    assert.match(state.configured === false ? state.reason : "", /--clear/,
+      "the message must point at the override, not at .env");
+    assert.equal(login(db, ENV_PASSWORD, "7.0.0.9").ok, false,
+      "a broken override must not silently fall through to the env password");
   });
 });
 
