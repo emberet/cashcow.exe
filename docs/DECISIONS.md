@@ -605,3 +605,66 @@ key, so this fails safe — but it means the real Pinata pin, and therefore
 everything in the table above, is untested in this codebase. The first mainnet
 launch would be its first real exercise.
 
+## 26. Deduping our own trends over 24h, separately from market crowding
+
+Raising throughput from 3 launches/day to 45 changed what the saturation check
+had to survive. At 3/day the odds of two candidates in one day being the same
+topic were low. At 45/day, with ten feeds all reacting to the same news cycle,
+it is the expected case — "Crypto Market", "crypto markets" and "Crypto Market
+Crash" are one story arriving three times.
+
+**The gate was open, and measurably so.** Seeded with the live DB row for
+`Crypto Market` (launched two hours earlier) and run through the real
+`checkSaturation`:
+
+| candidate | similarity | verdict before |
+|---|---|---|
+| `Crypto Market Crash` | 0.90 | launched |
+| `CryptoMarket` | 0.85 | launched |
+| `crypto markets` | 0.78 | launched |
+| `crypto market rally today` | 0.90 | launched |
+
+Two mechanisms existed and neither closed it:
+
+- **`maxSimilar: 2`** is a *tally*, and self-launches and market tokens land in
+  the same one. Our own two-hour-old token supplied only 1 of the 2 hits needed,
+  so the near-duplicate went out. Lowering it to 1 is not the fix — it would
+  mean a single unrelated token anywhere on pump.fun blocks every launch.
+- **`neverRelaunchSameTerm`** is an *exact* normalised-key match. One extra word
+  and it does not fire.
+
+The two questions are genuinely different and were being answered by one knob.
+*"Is this trend crowded?"* is a count, where one other token is normal.
+*"Did we already mint this?"* is a boolean, where one is already one too many.
+
+**Decision: a separate self-dedupe gate.** `findSelfDuplicate()` rejects on a
+single hit among our own launches in a rolling `selfDedupeHours` (default 24)
+window, with its own `selfDedupeSimilarity` floor. Market crowding keeps its
+count-based logic untouched.
+
+It runs **before** the market HTTP call, per the standing rule that free
+rejections come first — repeating ourselves is now diagnosed with zero network.
+
+**Two things it compares that the old path could not.** The model renames
+trends, so the term and the minted name diverge: "Fed Rate Decision" can mint as
+"MoneyPrinter". Checking only the term would miss the next candidate that is
+plainly the same coin; checking only the name would miss the same topic renamed
+differently. Both are compared, and the reason string names which one matched.
+
+**A second checkpoint after naming.** The upstream gate sees only the term, and
+has no symbol at all — the ticker does not exist until the model has run. So the
+check runs again on the generated identity, next to the existing filter
+re-check, and before the image render and IPFS pin. This is what catches two
+dissimilar terms that both mint as near-identical names or an identical ticker.
+It throws `DuplicateIdentityError`, handled as a decline rather than a failure
+so it does not count toward the consecutive-error breaker.
+
+**Not added to the tuner allowlist.** Both keys are pickiness, not money, so
+Invariant 3 would permit it — but the 24h window was an explicit operator
+instruction and the tuner should not quietly erode it. Default-deny means no
+change was needed to keep it out.
+
+**Known limitation:** the window counts dry-run and simulated launches too, the
+same as `everLaunched` and `selfLaunched` before it. A long dry-run session
+therefore suppresses real launches of those topics for 24h. That errs toward
+fewer launches, which is the safe direction, so it is left as is.

@@ -9,7 +9,7 @@ import {
   type Candidate,
 } from "../scoring/score.ts";
 import { compileFilters, checkTerm, checkAll } from "../scoring/filters.ts";
-import { checkSaturation } from "../scoring/saturation.ts";
+import { checkSaturation, findSelfDuplicate, DuplicateIdentityError } from "../scoring/saturation.ts";
 import { pumpFunMarket } from "../chain/market.ts";
 import { generateIdentity, RiskyTrendError } from "../assets/naming.ts";
 import { renderTokenImage } from "../assets/image.ts";
@@ -302,6 +302,17 @@ export async function launchTick(
         });
         continue;
       }
+      if (e instanceof DuplicateIdentityError) {
+        log.info("generated identity duplicates a recent launch, skipping", {
+          term: candidate.term, detail: e.detail,
+        });
+        reject("duplicate");
+        recordDecline(db, cfg, {
+          term: candidate.term, norm: candidate.key, score: candidate.score,
+          reason: "duplicate", detail: e.detail,
+        });
+        continue;
+      }
       if (e instanceof BudgetDenied) {
         log.warn("launch denied at execution time", { term: candidate.term, code: e.code });
         reject(`budget:${e.code}`);
@@ -341,6 +352,21 @@ async function launchCandidate(
   const check = checkAll([identity.name, identity.symbol, identity.description], filters);
   if (!check.allowed) {
     throw new Error(`generated identity rejected: ${check.reason}`);
+  }
+
+  // ...and a trend that looked distinct can still be renamed into a collision:
+  // "Fed Rate Decision" and "FOMC Meeting" are unlike each other as terms, and
+  // both plausibly mint as "MoneyPrinter". The gate upstream only saw the term
+  // and had no symbol to compare, so this is the first point the real name and
+  // ticker exist. Cheaper than the render and pin that follow.
+  const nameDupe = findSelfDuplicate(db, identity.name, identity.symbol, cfg.saturation);
+  if (nameDupe) {
+    const agoH = ((Date.now() - nameDupe.createdAt) / 3600_000).toFixed(1);
+    throw new DuplicateIdentityError(
+      `"${identity.name}" (${identity.symbol}) matches ` +
+      `${nameDupe.symbol || nameDupe.name} launched ${agoH}h ago ` +
+      `on ${nameDupe.matchedOn}, similarity ${nameDupe.score.toFixed(2)}`,
+    );
   }
 
   const image = await renderTokenImage(cfg, identity);

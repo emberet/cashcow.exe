@@ -76,7 +76,7 @@ understanding what it was protecting against.
 ## Commands
 
 ```bash
-npm test                       # 160 tests — run before every commit
+npm test                       # 170 tests — run before every commit
 npx tsc --noEmit               # typecheck (no build step; Node strips types)
 
 npm run preflight              # verify every credential BY USING IT; nothing is signed
@@ -119,8 +119,15 @@ runner/     orchestrator: two cadences (fast exits, slow launches)
 ```
 
 **Gate order matters.** Everything that can reject for free runs before anything
-that costs money: halt → warmup → threshold → content filters → saturation →
-budget → *then* the model call, image render, and IPFS pin.
+that costs money: halt → warmup → threshold → content filters → self-dedupe →
+saturation → budget → *then* the model call, image render, and IPFS pin.
+
+Self-dedupe and market saturation answer different questions and are separate
+knobs on purpose — see `docs/DECISIONS.md` §26. `maxSimilar` is a crowding
+*tally* (one other token is normal); `selfDedupeHours`/`selfDedupeSimilarity`
+are a *boolean* on our own recent launches, where one hit is already too many.
+Do not merge them back together. The dedupe check runs a second time on the
+generated identity, because the ticker does not exist until the model has run.
 
 ---
 

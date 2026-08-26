@@ -159,6 +159,32 @@ export const saturationSchema = z.object({
   similarityThreshold: z.number().min(0).max(1).default(0.72),
   /** Never launch the same normalised term twice, regardless of the above. */
   neverRelaunchSameTerm: z.boolean().default(true),
+
+  /**
+   * Rolling window in which OUR OWN launches dedupe on similarity alone.
+   *
+   * `maxSimilar` answers "is this trend crowded?", where one other token is
+   * normal and a count threshold is right. It is the wrong instrument for "did
+   * we already mint this?", where one is already one too many -- and because
+   * both self and market tokens land in the same tally, a fresh self-launch
+   * only contributed 1 of the 2 needed and the near-duplicate went out anyway.
+   * Measured against the live DB: with "Crypto Market" launched two hours
+   * earlier, "Crypto Market Crash" (0.90) and "crypto markets" (0.78) both
+   * passed the gate.
+   *
+   * `neverRelaunchSameTerm` does not cover this either -- it is an exact
+   * normalised-key match, so a single added word slips past it.
+   *
+   * Set to 0 to disable.
+   */
+  selfDedupeHours: z.number().nonnegative().default(24),
+  /**
+   * Similarity floor for the self-dedupe window. Separate from
+   * `similarityThreshold` on purpose: that one trades against market crowding,
+   * this one against repeating ourselves, and they should be able to move
+   * independently.
+   */
+  selfDedupeSimilarity: z.number().min(0).max(1).default(0.72),
 });
 
 const feedBase = {
@@ -294,13 +320,32 @@ export const assetsSchema = z.object({
     maxNameLength: z.number().int().positive().default(32),
     minTickerLength: z.number().int().positive().default(3),
     maxTickerLength: z.number().int().positive().default(8),
+    /**
+     * pump.fun publishes no description limit, so this is our choice, not
+     * theirs. 200 characters is what the code already truncated at; the model
+     * prompt asked for 120 and the two disagreed silently, so a compliant model
+     * wrote 120 and a chatty one got cut mid-word at 200. One number now feeds
+     * both. Lives off-chain in the metadata JSON, so it costs no packet bytes.
+     */
+    maxDescriptionLength: z.number().int().positive().default(200),
     apiKeyEnv: z.string().default("ANTHROPIC_API_KEY"),
   }).default({}),
   image: z.object({
     /** `template` renders locally for ~free; `none` requires a fallback image. */
     mode: z.enum(["template", "none"]).default("template"),
-    width: z.number().int().positive().default(512),
-    height: z.number().int().positive().default(512),
+    /**
+     * 1000x1000 square, because that is pump.fun's stated MINIMUM resolution
+     * for a coin image -- "Minimum resolution: 1000x1000px", recommended
+     * aspect ratio 1:1 (square), max 15MB, .jpg/.gif/.png:
+     * https://intercom.help/pumpfun-web/en/articles/11002205-create-a-coin-on-pump-fun
+     *
+     * This was 512x512, i.e. UNDER their floor. Nothing here touches the launch
+     * transaction -- the image is referenced by IPFS URL, not embedded -- so
+     * raising it costs pin size only, never the ~17 bytes of packet headroom
+     * the create instruction has left.
+     */
+    width: z.number().int().positive().default(1000),
+    height: z.number().int().positive().default(1000),
   }).default({}),
   ipfs: z.object({
     provider: z.literal("pinata").default("pinata"),

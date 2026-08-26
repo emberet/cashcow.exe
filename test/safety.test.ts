@@ -9,7 +9,9 @@ import { openMemoryDb, type Db } from "../src/util/db.ts";
 import { BudgetGuard, BudgetDenied } from "../src/risk/budget.ts";
 import { KillSwitch, __resetInProcessHalt } from "../src/risk/killswitch.ts";
 import { compileFilters, checkTerm, checkAll } from "../src/scoring/filters.ts";
-import { evaluateSaturation, everLaunched, type KnownToken } from "../src/scoring/saturation.ts";
+import {
+  evaluateSaturation, everLaunched, findSelfDuplicate, checkSaturation, type KnownToken,
+} from "../src/scoring/saturation.ts";
 import { similarity, tickerize, normalize } from "../src/util/text.ts";
 import { recoverCasing } from "../src/feeds/googleTrends.ts";
 import { publishWalletAddress, publishedWalletAddress } from "../src/chain/wallet.ts";
@@ -279,6 +281,94 @@ describe("saturation — the check that stops the most common way to lose money"
     seedLaunch(db, "mintA", "moo deng", "MOODENG", 90 * 24 * 3600_000); // 90 days ago
     assert.equal(everLaunched(db, "Moo Deng"), true, "word order and case must not matter");
     assert.equal(everLaunched(db, "quantum ferret"), false);
+  });
+});
+
+// ------------------------------------------------- 24h self-dedupe
+
+describe("self-dedupe — not minting our own trend twice in a day", () => {
+  const scfg = configSchema.parse({}).saturation;
+
+  /**
+   * Regression. These four all LAUNCHED before the self-dedupe gate existed,
+   * verified against the live DB row for "Crypto Market". `maxSimilar` is a
+   * crowding tally that needs two hits, so our own two-hour-old launch supplied
+   * only one of them and the near-duplicate went out; `neverRelaunchSameTerm`
+   * is an exact key match, so one extra word slips past it.
+   */
+  for (const term of [
+    "Crypto Market Crash",     // 0.90 -- extra word
+    "crypto markets",          // 0.78 -- plural
+    "CryptoMarket",            // 0.85 -- spacing
+    "crypto market rally today",
+  ]) {
+    test(`blocks "${term}" after we launched Crypto Market 2h ago`, () => {
+      const db = openMemoryDb();
+      seedLaunch(db, "mintA", "Crypto Market", "CRYPTOMA", 2 * 3600_000);
+      const dupe = findSelfDuplicate(db, term, undefined, scfg);
+      assert.ok(dupe, `${term} must be caught as a duplicate`);
+      assert.equal(dupe.matchedOn, "term");
+    });
+  }
+
+  test("an unrelated trend still gets through", () => {
+    const db = openMemoryDb();
+    seedLaunch(db, "mintA", "Crypto Market", "CRYPTOMA", 2 * 3600_000);
+    assert.equal(findSelfDuplicate(db, "quantum ferret", undefined, scfg), undefined);
+  });
+
+  test("the window rolls: the same trend is allowed again after 24h", () => {
+    const db = openMemoryDb();
+    seedLaunch(db, "mintA", "Crypto Market", "CRYPTOMA", 25 * 3600_000);
+    assert.equal(findSelfDuplicate(db, "Crypto Market Crash", undefined, scfg), undefined);
+    // ...but only just outside it.
+    const db2 = openMemoryDb();
+    seedLaunch(db2, "mintB", "Crypto Market", "CRYPTOMA", 23 * 3600_000);
+    assert.ok(findSelfDuplicate(db2, "Crypto Market Crash", undefined, scfg));
+  });
+
+  test("catches a ticker collision between unrelated topics", () => {
+    const db = openMemoryDb();
+    seedLaunch(db, "mintA", "Global Banking System", "GBS", 3600_000);
+    const dupe = findSelfDuplicate(db, "great banana shortage", "GBS", scfg);
+    assert.ok(dupe, "an identical ticker is a collision even if the topics differ");
+    assert.equal(dupe.matchedOn, "symbol");
+  });
+
+  test("matches the minted NAME when the model renamed the trend", () => {
+    // The term and the minted name diverge, so checking only one would miss it.
+    const db = openMemoryDb();
+    db.prepare(
+      `INSERT INTO launches (mint, term, norm, name, symbol, created_at, dry_run)
+       VALUES (?, ?, ?, ?, ?, ?, 0)`,
+    ).run("mintA", "Fed Rate Decision", "decision fed rate", "MoneyPrinter", "PRINTER",
+      Date.now() - 3600_000);
+
+    const dupe = findSelfDuplicate(db, "money printer", undefined, scfg);
+    assert.ok(dupe, "a later trend resembling the minted name must be caught");
+    assert.equal(dupe.matchedOn, "name");
+  });
+
+  test("selfDedupeHours: 0 disables the gate entirely", () => {
+    const db = openMemoryDb();
+    seedLaunch(db, "mintA", "Crypto Market", "CRYPTOMA", 2 * 3600_000);
+    const off = { ...scfg, selfDedupeHours: 0 };
+    assert.equal(findSelfDuplicate(db, "Crypto Market Crash", undefined, off), undefined);
+  });
+
+  test("checkSaturation reports the duplicate without calling the market", async () => {
+    const db = openMemoryDb();
+    seedLaunch(db, "mintA", "Crypto Market", "CRYPTOMA", 2 * 3600_000);
+
+    let called = false;
+    const market = {
+      async recentTokens() { called = true; return []; },
+    };
+    const r = await checkSaturation(db, "Crypto Market Crash", undefined, scfg, market);
+
+    assert.equal(r.saturated, true);
+    assert.match(r.reason ?? "", /we launched CRYPTOMA/);
+    assert.equal(called, false, "a free rejection must not cost an HTTP call");
   });
 });
 
