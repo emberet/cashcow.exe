@@ -828,3 +828,49 @@ safeguard to work around a shell quirk.
 
 To reproduce a CLI run the way the bot sees it: `env -u ANTHROPIC_API_KEY node
 src/cli.ts <cmd>`.
+
+## 31. What a hard reboot found: a startup race on the database
+
+The reboot test was passed deliberately rather than assumed. All three
+LaunchAgents came back unattended, both servers rebound to loopback only, the
+tunnel reconnected, and `https://cashcowexe.win` served 200 with `/admin`,
+`/api/admin/snapshot` and `/api/login` all still 404. The database survived the
+unclean shutdown intact: `PRAGMA integrity_check` returned `ok`, the WAL
+replayed, and all 100,273 signals were present.
+
+One thing did not survive cleanly, and it had been happening since the two
+LaunchAgents were installed.
+
+**The bot and the public web server race for `data/bot.db` at startup, and the
+loser used to die.** WAL lets them read concurrently, but a writer still takes
+an exclusive lock, and SQLite's default `busy_timeout` is **0** — contention
+fails *instantly* rather than waiting. At boot both agents start together, both
+call `migrate()`, which opens a transaction even when there is nothing to
+migrate, and the loser exited with `database is locked`.
+
+It was invisible for three reasons, which is the interesting part:
+
+- `KeepAlive` restarted the crashed process ~0.4s later and the retry won the
+  lock, so the system self-healed.
+- The only symptom was the public dashboard being unreachable for the
+  `ThrottleInterval` (~10s) after each boot — easy to attribute to "still
+  booting".
+- `launchctl list` showed it plainly as last-exit **1** on `com.cashcow.public`,
+  but a non-zero exit next to a running PID reads as historical noise.
+
+Fixed with `PRAGMA busy_timeout` in `openDb()`. At a few writes per minute,
+waiting costs nothing and the alternative is a hard crash. `com.cashcow.public`
+now reports last exit 0 after a simultaneous restart.
+
+**On the tests.** The regression guard is the one asserting `openDb` applies a
+non-zero timeout — verified by removing the fix and watching it fail. A second
+test pins the mechanism with both arms (timeout 0 fails in <100ms; timeout set
+blocks then gives up) so the guard is not mistaken for cargo cult. That second
+test deliberately overrides the pragma on its own connection and therefore
+passes with or without the fix; it is documentation, not a guard, and says so.
+Using the real `BUSY_TIMEOUT_MS` would have added 5s to every suite run for no
+extra coverage.
+
+**Sleep.** `sudo pmset -c sleep 0` is applied — AC power shows `sleep 0`. Note
+that *battery* still shows `sleep 1`, so unplugging drops the site after a
+minute, and the lid caveat from §27 is unchanged.

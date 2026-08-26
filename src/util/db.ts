@@ -289,6 +289,12 @@ const MIGRATIONS: string[] = [
   `,
 ];
 
+/**
+ * How long a writer waits for a lock before giving up. Generous on purpose:
+ * the alternative is a hard crash, and nothing here is latency-sensitive.
+ */
+export const BUSY_TIMEOUT_MS = 5000;
+
 export function openDb(dbPath: string): Db {
   if (handle) return handle;
   const abs = isAbsolute(dbPath) ? dbPath : resolve(PROJECT_ROOT, dbPath);
@@ -299,6 +305,16 @@ export function openDb(dbPath: string): Db {
   db.exec("PRAGMA foreign_keys = ON");
   // Durability matters more than throughput here; we write a few rows per minute.
   db.exec("PRAGMA synchronous = FULL");
+  // Two processes open this file: the bot and the public web server. WAL lets
+  // them read concurrently, but the writer still takes an exclusive lock, and
+  // SQLite's default busy_timeout is 0 -- contention fails INSTANTLY rather
+  // than waiting. At boot both LaunchAgents start at once, both call migrate()
+  // (which opens a transaction even when there is nothing to migrate), and the
+  // loser died with "database is locked". KeepAlive restarted it, so the only
+  // symptom was the public dashboard being down for the ~10s ThrottleInterval
+  // on every reboot. Waiting instead of failing costs nothing at a few writes
+  // per minute.
+  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
 
   migrate(db);
   handle = db;
