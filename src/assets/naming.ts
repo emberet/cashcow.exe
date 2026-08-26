@@ -55,7 +55,7 @@ they must be rejected rather than renamed around.
 STEP 2 -- only if risk is null, produce a token identity:
 - name: catchy, <= {MAXNAME} characters
 - symbol: {MINTICK}-{MAXTICK} characters, A-Z and 0-9 only, uppercase
-- description: one sentence, <= 120 characters, playful
+- description: one sentence, <= {MAXDESC} characters, playful
 
 Respond with only a JSON object, no prose:
 {"risk": null | {"category":"brand|person|tragedy|slur","reason":"..."},
@@ -114,7 +114,8 @@ async function callClaude(
   const system = SYSTEM
     .replace("{MAXNAME}", String(a.maxNameLength))
     .replace("{MINTICK}", String(a.minTickerLength))
-    .replace("{MAXTICK}", String(a.maxTickerLength));
+    .replace("{MAXTICK}", String(a.maxTickerLength))
+    .replace("{MAXDESC}", String(a.maxDescriptionLength));
 
   const res = await httpFetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -163,7 +164,7 @@ async function callClaude(
   return {
     name,
     symbol,
-    description: (parsed.description ?? "").slice(0, 200).trim(),
+    description: (parsed.description ?? "").slice(0, a.maxDescriptionLength).trim(),
     source: "model",
   };
 }
@@ -182,7 +183,8 @@ export function fallbackIdentity(cfg: Config, candidate: Candidate): TokenIdenti
   return {
     name,
     symbol,
-    description: `${name} trending on ${candidate.feeds.join(", ")}.`.slice(0, 200),
+    description: `${name} trending on ${candidate.feeds.join(", ")}.`
+      .slice(0, a.maxDescriptionLength),
     source: "fallback",
   };
 }

@@ -560,3 +560,48 @@ but `verifyPassword` at N=2¹⁷ is ~200ms of CPU, so an authenticated client co
 otherwise pin a core by hammering it. And the CLI prompt now refuses a
 non-TTY stdin: on EOF the prompt never resolved and the process exited 0 having
 done nothing, which under `--save` was indistinguishable from success.
+
+---
+
+## 25. What pump.fun actually accepts for a listing, with sources
+
+pump.fun is not a documented API, so every claim here carries a link. Checked
+2026-08-26. Re-verify before trusting it — they change without notice.
+
+| Thing | Value | Source | Confidence |
+|---|---|---|---|
+| Coin image min resolution | **1000×1000px**, 1:1 square, ≤15MB, `.jpg/.gif/.png` | [pump.fun help — create a coin](https://intercom.help/pumpfun-web/en/articles/11002205-create-a-coin-on-pump-fun) | verified, primary |
+| Banner | 1500×500 (3:1), ≤5MB, gifs allowed, **"only settable during coin creation. Cannot be changed later."** | same | verified, primary |
+| Metadata after creation | Immutable — "the contract is renounced upon creation which makes the Metadata Immutable" | same | verified, primary |
+| Metadata JSON fields | `name`, `symbol`, `description`, `image`, `showName`, `createdOn`, optional `twitter`/`telegram`/`website` | [Moralis](https://docs.moralis.com/web3-data-api/solana/tutorials/get-pump-fun-token-metadata), [PumpPortal](https://pumpportal.fun/creation/) | corroborated, third-party |
+| A `banner` field in that JSON | **No evidence one exists** | absent from every source searched, and from `@pump-fun/pump-sdk` 1.36.0 | unverified, leaning no |
+| `pump.fun/api/ipfs` upload | **Dead.** Bring your own pinner | [pumpdotfun-sdk#70](https://github.com/rckprtr/pumpdotfun-sdk/issues/70), [PumpPortal](https://pumpportal.fun/creation/) | corroborated |
+| Symbol max | 10 chars (we use 3–8, `[A-Z0-9]`) | [Moralis](https://docs.moralis.com/web3-data-api/solana/tutorials/get-pump-fun-token-metadata) | corroborated |
+| Description max | **Not published by pump.fun.** Ours is a choice | — | our decision, not theirs |
+
+**Two defects this found.**
+
+The image was rendered at **512×512 — below pump.fun's own 1000×1000 floor.**
+Raised. This is free: the image is referenced by IPFS URL, not embedded, so it
+costs pin size and never the ~17 bytes of packet headroom §18 leaves us.
+
+The description had **two disagreeing limits** — the model prompt asked for ≤120
+characters while both code paths truncated at 200. A compliant model wrote 120;
+a chatty one got cut mid-word. One config key now feeds the prompt and both
+truncations.
+
+**Why there is still no banner support.** A banner cannot be added after
+creation, so if it is settable at all it is at mint time — and nothing in the
+SDK's create instruction (`name`/`symbol`/`uri` only) nor any documented
+metadata field carries one. Building a renderer against a guessed field name
+would spend render time and pin cost on something silently discarded. Left
+unbuilt and documented instead. If the field is ever confirmed, the banner
+render is a near-copy of the logo path.
+
+**Still unproven: the upload path has never run.** `src/assets/ipfs.ts` returns
+`https://example.invalid/...` whenever `PINATA_JWT` is unset off-mainnet, which
+is exactly what both devnet launches used. Mainnet refuses to launch without the
+key, so this fails safe — but it means the real Pinata pin, and therefore
+everything in the table above, is untested in this codebase. The first mainnet
+launch would be its first real exercise.
+
