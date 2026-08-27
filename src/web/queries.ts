@@ -192,7 +192,13 @@ export function recentLaunches(db: Db, cfg: Config, limit = 24) {
           exitReason: r.exit_reason ? String(r.exit_reason) : null,
         }
       : null,
-    url: `https://pump.fun/coin/${String(r.mint)}`,
+    // Solscan over pump.fun: the tx hash is the actual on-chain proof of the
+    // launch, not just a link to pump.fun's UI for the mint. Falls back to
+    // the mint's token page when there's no signature yet (pretend-mode
+    // launches never get one), so "peek" never dead-ends on solscan.io.
+    url: r.signature
+      ? `https://solscan.io/tx/${String(r.signature)}`
+      : `https://solscan.io/token/${String(r.mint)}`,
   }));
 }
 
@@ -397,6 +403,9 @@ export type WalletView = {
   address: string | null;
   balanceSol: number | null;
   explorerUrl: string | null;
+  /** pump.fun's own creator-rewards tab for this wallet -- where claimed and
+   *  claimable creator fees actually live. Null until an address is published. */
+  creatorRewardsUrl: string | null;
   network: string;
 };
 
@@ -709,13 +718,17 @@ export async function refreshWallet(db: Db, cfg: Config): Promise<void> {
 export function walletView(db: Db, cfg: Config): WalletView {
   const address = publishedWalletAddress(db);
   if (!address) {
-    return { address: null, balanceSol: null, explorerUrl: null, network: cfg.network };
+    return {
+      address: null, balanceSol: null, explorerUrl: null, creatorRewardsUrl: null,
+      network: cfg.network,
+    };
   }
   const cluster = cfg.network === "mainnet-beta" ? "" : `?cluster=${cfg.network}`;
   return {
     address,
     balanceSol: walletCache.sol,
     explorerUrl: `https://solscan.io/account/${address}${cluster}`,
+    creatorRewardsUrl: `https://pump.fun/profile/${address}?tab=creator-rewards`,
     network: cfg.network,
   };
 }

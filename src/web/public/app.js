@@ -163,7 +163,9 @@ function render(d) {
       <div class="sub">SOL. Creator-fee milk, minus what the dev positions trampled.</div>
     </div>
     <div class="plate">
-      <div class="label">Creator-fee milk</div>
+      ${d.wallet && d.wallet.creatorRewardsUrl
+        ? `<a href="${esc(d.wallet.creatorRewardsUrl)}" target="_blank" rel="noopener noreferrer" class="label" style="display:block;width:fit-content" title="Open creator rewards on pump.fun">Creator-fee milk &#8599;</a>`
+        : `<div class="label">Creator-fee milk</div>`}
       <div class="value deep">${esc(sol(s.feesTotalSol))}</div>
       <div class="sub">SOL, collected in ${d.claims.length} bucket${d.claims.length === 1 ? "" : "s"}</div>
     </div>
