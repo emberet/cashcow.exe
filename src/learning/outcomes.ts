@@ -1,6 +1,7 @@
 import type { Db } from "../util/db.ts";
 import { isPretend, type Config } from "../config/schema.ts";
 import { fetchJson } from "../util/http.ts";
+import { fetchDexActivity } from "../research/volume.ts";
 import { log, errFields } from "../util/log.ts";
 
 /**
@@ -21,6 +22,13 @@ import { log, errFields } from "../util/log.ts";
  * A launch is not judged immediately. Most pump.fun tokens do nothing for
  * hours and then either catch or die, so an outcome stays `pending` until it
  * has been observed for `settleAfterHours`.
+ *
+ * `peak_volume_h24_usd` (DexScreener, via `fetchDexActivity` --
+ * `src/research/volume.ts`) is tracked the same running-max way as
+ * `peak_mcap_usd`, but is observational only: `classify()` still verdicts on
+ * peak market cap alone. There isn't enough settled history yet to know
+ * whether volume would change any verdict, so it isn't wired into one --
+ * see `docs/DECISIONS.md`/the plan that added this column.
  */
 
 const BROWSERISH =
@@ -67,13 +75,14 @@ export function recordLaunch(
 export async function refreshOutcomes(db: Db, cfg: Config): Promise<number> {
   const settleMs = cfg.learning.settleAfterHours * 3600_000;
   const rows = db.prepare(
-    `SELECT mint, launched_at, entry_sol, first_mcap_usd, peak_mcap_usd
+    `SELECT mint, launched_at, entry_sol, first_mcap_usd, peak_mcap_usd, peak_volume_h24_usd
        FROM launch_outcomes
       WHERE verdict = 'pending' AND dry_run = ?
       ORDER BY launched_at ASC LIMIT 40`,
   ).all(isPretend(cfg) ? 1 : 0) as Array<{
     mint: string; launched_at: number; entry_sol: number | null;
     first_mcap_usd: number | null; peak_mcap_usd: number | null;
+    peak_volume_h24_usd: number | null;
   }>;
 
   if (!rows.length) return 0;
@@ -82,12 +91,17 @@ export async function refreshOutcomes(db: Db, cfg: Config): Promise<number> {
   for (const row of rows) {
     try {
       const coin = await fetchCoin(row.mint);
+      // Best-effort, separate from fetchCoin: a DexScreener hiccup must not
+      // stop the mcap-based verdict pipeline, so failures resolve to
+      // undefined rather than throwing out of this iteration.
+      const dex = await fetchDexActivity(row.mint).catch(() => undefined);
       const now = Date.now();
 
       // In dry run there is no real mint to look up; settle on our own P&L only.
       const mcap = coin?.usd_market_cap ?? 0;
       const peak = Math.max(coin?.ath_market_cap ?? 0, mcap, row.peak_mcap_usd ?? 0);
       const first = row.first_mcap_usd ?? mcap;
+      const peakVolume = Math.max(dex?.volumeH24 ?? 0, row.peak_volume_h24_usd ?? 0);
       const age = now - row.launched_at;
       const settled = age >= settleMs;
 
@@ -98,6 +112,7 @@ export async function refreshOutcomes(db: Db, cfg: Config): Promise<number> {
       db.prepare(
         `UPDATE launch_outcomes
             SET first_mcap_usd = ?, peak_mcap_usd = ?, last_mcap_usd = ?,
+                peak_volume_h24_usd = ?,
                 replies = ?, graduated = ?, is_banned = ?,
                 exit_sol = ?, realized_pnl_sol = ?,
                 observations = observations + 1,
@@ -107,6 +122,7 @@ export async function refreshOutcomes(db: Db, cfg: Config): Promise<number> {
           WHERE mint = ?`,
       ).run(
         first, peak, mcap,
+        peakVolume,
         coin?.reply_count ?? 0,
         coin?.complete ? 1 : 0,
         coin?.is_banned ? 1 : 0,
@@ -179,7 +195,7 @@ export type OutcomeRow = {
   mint: string; term: string; symbol: string; score: number;
   components: Record<string, number>; feeds: string[]; families: string[];
   namingSource: string; launchHourUtc: number;
-  peakMcapUsd: number; replies: number; graduated: boolean;
+  peakMcapUsd: number; peakVolumeH24Usd: number; replies: number; graduated: boolean;
   realizedPnlSol: number | null; estimatedFeeSol: number;
   verdict: Verdict; launchedAt: number;
 };
@@ -202,6 +218,7 @@ export function settledOutcomes(db: Db, cfg: Config, limit = 200): OutcomeRow[] 
     namingSource: String(r.naming_source ?? ""),
     launchHourUtc: Number(r.launch_hour_utc ?? 0),
     peakMcapUsd: Number(r.peak_mcap_usd ?? 0),
+    peakVolumeH24Usd: Number(r.peak_volume_h24_usd ?? 0),
     replies: Number(r.replies ?? 0),
     graduated: Number(r.graduated ?? 0) === 1,
     realizedPnlSol: r.realized_pnl_sol == null ? null : Number(r.realized_pnl_sol),

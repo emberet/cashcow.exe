@@ -965,3 +965,50 @@ defect was found by rendering the page and measuring the icons.
 version is derived from real file bytes, that no asset referenced by a page is
 missing from `VERSIONED_ASSETS`, and that both social icons carry explicit
 dimensions. The last one was verified to fail against the pre-fix markup.
+
+---
+
+## 33. `bigint-buffer`'s unpatched CVE: traced, reachable, and accepted
+
+**Context.** An external code review flagged `npm audit`'s HIGH-severity
+finding for `bigint-buffer` (GHSA-3gc7-fjrx-p6mg, a buffer over-read in
+`toBigIntLE()`, CVSS 7.5, `AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H` — availability
+only, no confidentiality or integrity impact). `npm audit`'s suggested fix is
+a semver-major downgrade of `@solana/spl-token` to `0.1.8`, which this repo
+cannot use (it needs 0.4.x's API) — not a real fix, so this needed an actual
+reachability trace rather than a blind bump or a shrug.
+
+**Where it actually sits.** Nothing in `src/` imports `bigint-buffer` or
+`@solana/buffer-layout-utils` directly — `src/chain/trade.ts` only pulls
+`getAssociatedTokenAddressSync` and `TOKEN_PROGRAM_ID` from
+`@solana/spl-token`, pure address derivation, no account-data decoding. The
+vulnerable function is reached one layer down: `@pump-fun/pump-sdk` depends on
+`@pump-fun/pump-swap-sdk`, whose `getCoinCreatorVaultBalance()` calls
+`@solana/spl-token`'s `getAccount()` to read the pump-AMM creator-fee vault
+token account — `unpackAccount` decodes its `amount` field via
+`@solana/buffer-layout-utils`'s `u64` layout, which calls `bigint-buffer`'s
+`toBigIntLE()`. `src/chain/fees.ts`'s `creatorVaultBalanceSol()` calls
+`getCreatorVaultBalanceBothPrograms()`, which calls that function — so this
+codebase's fee-checking path does reach the vulnerable code, confirmed by
+reading `node_modules/@pump-fun/pump-swap-sdk/dist/index.js` directly, not
+inferred from the dependency graph alone.
+
+**Why it's accepted rather than mitigated.** The overflow condition needs a
+buffer shorter than the field width the decoder expects. The account being
+decoded (`coinCreatorVaultAta`) is a real SPL Token account, created and
+sized by the SPL Token program itself (always exactly `ACCOUNT_LEN` = 165
+bytes) and owned by a PDA the pump-AMM program controls — not free-form data
+an attacker can shape or resize. Reaching the vulnerable code path is
+confirmed; reaching the *vulnerable input shape* through it is not something
+an external party controls here. Combined with the CVSS vector being
+availability-only (a crash, not data exposure or corruption) on a read that
+is already wrapped in try/catch (`getCoinCreatorVaultBalance` catches and
+returns zero on any error), the worst case is a swallowed exception on a fee
+check, not a security breach.
+
+**What would change this.** A patched `bigint-buffer` release, or
+`@solana/spl-token` dropping the dependency — re-run `npm audit` after any
+`@solana/spl-token`/`@pump-fun/*` upgrade and revisit this entry if the
+finding disappears or the reachability picture changes. Not tracked as a
+recurring TODO because there is nothing actionable to do differently today;
+this entry is the record that it was investigated, not deferred by default.

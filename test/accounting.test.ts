@@ -135,14 +135,15 @@ describe("distribution ledger", () => {
 
 // ==================================================================
 // Migration additivity: each new migration must not disturb earlier ones.
-// v8 only adds an index (idx_signals_dedupe), so the table list is unchanged.
+// v8 only adds an index (idx_signals_dedupe); v9 only adds a nullable column
+// (peak_volume_h24_usd), so the table list is unchanged by either.
 // ==================================================================
 
-describe("migration v8 is purely additive", () => {
-  test("a fresh database lands at user_version 8 with earlier tables intact", () => {
+describe("migration v9 is purely additive", () => {
+  test("a fresh database lands at user_version 9 with earlier tables intact", () => {
     const db = openMemoryDb();
     const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-    assert.equal(version, 8);
+    assert.equal(version, 9);
 
     const tables = new Set(
       (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>)
@@ -155,5 +156,17 @@ describe("migration v8 is purely additive", () => {
     ]) {
       assert.ok(tables.has(t), `missing table ${t}`);
     }
+  });
+
+  test("launch_outcomes gained peak_volume_h24_usd, nullable, without disturbing existing columns", () => {
+    const db = openMemoryDb();
+    const cols = db.prepare(`PRAGMA table_info(launch_outcomes)`).all() as Array<
+      { name: string; notnull: number }
+    >;
+    const col = cols.find((c) => c.name === "peak_volume_h24_usd");
+    assert.ok(col, "expected peak_volume_h24_usd on launch_outcomes");
+    assert.equal(col!.notnull, 0, "must be nullable so existing rows do not need backfilling");
+    // A representative earlier column is still there, unchanged.
+    assert.ok(cols.some((c) => c.name === "peak_mcap_usd"));
   });
 });

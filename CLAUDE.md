@@ -76,7 +76,7 @@ understanding what it was protecting against.
 ## Commands
 
 ```bash
-npm test                       # 272 tests — run before every commit
+npm test                       # 279 tests — run before every commit
 npx tsc --noEmit               # typecheck (no build step; Node strips types)
 
 npm run preflight              # verify every credential BY USING IT; nothing is signed
@@ -153,7 +153,7 @@ generated identity, because the ticker does not exist until the model has run.
 - **`node:sqlite` returns null-prototype objects.** Fine to read, surprising to
   spread.
 - **Migrations are append-only** in `src/util/db.ts`. Never edit an existing one;
-  add the next. Currently at v8.
+  add the next. Currently at v9.
 - **`launch.simulate` builds the real transaction and simulates it.** Stronger
   evidence than `dryRun`, which never touches the chain. Both book against the
   pretend ledger via `isPretend()` — a simulation must never consume the real
@@ -234,6 +234,19 @@ generated identity, because the ticker does not exist until the model has run.
   `min(capacity, effectiveRisk)`, so leaving capacity on the un-windowed
   static value would have silently defeated the window whenever adaptive
   capacity is off (the default).
+- **`withBalanceLock()` (`src/chain/rpc.ts`) is a process-local, in-memory
+  lock — it does nothing across two processes sharing the same wallet.** It
+  serializes launch/fee-claim/sell balance-delta measurements *within one
+  Node process* (see the comment at its definition: a fee claim once landed
+  inside a launch's snapshot window and made a real ~0.025 SOL cost measure
+  as 0). Running a second bot process against the same `wallet-keypair.json`
+  — two LaunchAgents, a stray `run --once` left running, a manual CLI
+  invocation racing the live loop — reintroduces exactly that class of bug
+  with no lock protecting against it, because the two processes don't share
+  the `Promise` this closes over. There is currently no code-level guard
+  against this; it is an operational invariant (one writer process per
+  wallet) enforced by convention only. Check `ps`/`lsof` for stray processes
+  before starting another one against a live wallet.
 - **"More volume" is a discovery-quality problem, not a trading problem —
   `src/feeds/onchain.ts`'s `curveProgress()` and `src/feeds/dexActivity.ts`
   are gmgn.ai-inspired, both scoring-layer only.** gmgn.ai (a multi-chain meme

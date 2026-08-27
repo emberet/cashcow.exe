@@ -1,6 +1,12 @@
 # Status
 
-Honest state of play. Updated 2026-08-25.
+Honest state of play. Updated 2026-08-27.
+
+**This bot is live on mainnet and has been spending real SOL since
+2026-08-24.** Anything below that still says "mainnet untested" is stale —
+kept only where it describes what devnet proved before that date. See
+`docs/DECISIONS.md` for the mainnet go-live entry and `node src/cli.ts
+profit`/`outcomes` for the current, real P&L.
 
 ---
 
@@ -8,7 +14,7 @@ Honest state of play. Updated 2026-08-25.
 
 | Area | How |
 |---|---|
-| Safety rails, exit rules, filters, saturation, tuner guardrails, adaptive capacity | **160 tests**, `npm test` |
+| Safety rails, exit rules, filters, saturation, tuner guardrails, adaptive capacity | **279 tests**, `npm test` |
 | Types | `npx tsc --noEmit` clean, no build step |
 | Feed adapters | Live polls. 6 of 9 enabled feeds producing; 300 signals/poll |
 | Full signal pipeline | End-to-end dry run: feeds → phrases → score → filters → saturation → naming → artwork → recorded launch |
@@ -46,8 +52,12 @@ SOL — that needs real trading volume on a launched token, which devnet does no
 naturally provide. Manufacturing that volume by trading against our own token
 would be wash trading in shape, so it was not done even with play money.
 
-**Mainnet is still untested.** Devnet proves the mechanics; it does not prove
-the economics, priority-fee competition, or that anyone will trade the tokens.
+**Correction: mainnet is no longer untested.** Devnet proved the mechanics
+first, as intended, but the bot has been live on mainnet since 2026-08-24 —
+see the "Path to live" steps below, all of which are now behind it. Priority-fee
+competition, whether tokens actually get traded, and real fee income are now
+things `node src/cli.ts outcomes`/`profit`/`budget` report on directly, not
+open questions.
 
 **Polymarket is unconfirmed.** The Gamma API was unreachable from the build
 machine while every other host resolved normally — likely an egress restriction
@@ -58,8 +68,11 @@ needs one live confirmation from your network.
 settled launches and there are none. Its guardrails are tested exhaustively; its
 *judgement* is untested.
 
-**No mainnet economics.** Every number about fees earned is projection from the
-published fee schedule, not observation.
+**Mainnet economics are now observed, not projected** for launches that have
+happened — `node src/cli.ts outcomes` and `profit` report real, settled
+figures. Fee income is still an estimate rather than a measurement per-token
+(see "Known limitations" below on why), and the sample size is still small
+enough that a trend line is not yet meaningful.
 
 ---
 
@@ -78,15 +91,16 @@ published fee schedule, not observation.
    exercise a sell and a fee claim. **Use devnet, not testnet** — testnet's
    deployment is stale and the SDK cannot decode it.
 
-3. **Mainnet, one manual launch at the smallest dev buy.** Verify on Solscan:
-   mint created, metadata resolves from IPFS, dev buy landed, position recorded.
-   Wait for trades, then confirm `node src/cli.ts fees` reports a non-zero vault
-   and a claim lands SOL back in the wallet. **This is the only test that proves
-   the revenue model works end to end. Do not enable full auto before it passes.**
+3. ~~Mainnet, one manual launch at the smallest dev buy.~~ **Done, 2026-08-24.**
+   `config.json` has run with `dryRun: false`, `network: mainnet-beta` since.
+   Verify current state with `node src/cli.ts fees`/`outcomes` rather than
+   trusting this file's prose to stay current.
 
-4. **Full auto, conservative caps, watched for 24h.** Reconcile the spend ledger
-   against the real wallet delta. If they disagree, the budget rail has a hole and
-   everything stops until it is fixed.
+4. ~~Full auto, conservative caps, watched for 24h.~~ **In progress, ongoing.**
+   The bot has been running full auto on mainnet since step 3. Reconcile the
+   spend ledger against the real wallet delta periodically (`node src/cli.ts
+   budget`); if they disagree, the budget rail has a hole and everything stops
+   until it is fixed.
 
 5. **Accumulate 20+ settled launches, then enable learning** in propose-only mode.
    Read what it proposes before ever setting `autoApply`.

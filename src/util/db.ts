@@ -297,6 +297,16 @@ const MIGRATIONS: string[] = [
   `
   CREATE INDEX idx_signals_dedupe ON signals(feed, source_text, ingested_at);
   `,
+
+  // v9 -- track ongoing DexScreener trading volume alongside the existing
+  // peak-mcap tracking. `classify()` (src/learning/outcomes.ts) still verdicts
+  // on peak market cap alone -- this column is observational only, recorded
+  // so a volume-based signal can be evaluated later against real data instead
+  // of guessed at. Same running-max pattern as peak_mcap_usd: refreshOutcomes()
+  // keeps the highest 24h volume seen across every check, not the latest.
+  `
+  ALTER TABLE launch_outcomes ADD COLUMN peak_volume_h24_usd REAL;
+  `,
 ];
 
 /**
