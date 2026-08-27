@@ -144,7 +144,7 @@ async function main() {
       const results = await pollAll(ctx, { force: true });
       const weights = new Map(enabledFeeds(cfg).map(({ adapter, weight }) => [adapter.id, weight]));
       const signals = results.flatMap((r) => r.signals);
-      const n = ingestSignals(db, signals, weights);
+      const n = ingestSignals(db, signals, weights, cfg.scoring);
       log.info("signals ingested", { raw: signals.length, phrases: n });
 
       const candidates = buildCandidates(db, cfg.scoring);

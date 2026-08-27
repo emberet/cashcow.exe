@@ -134,14 +134,15 @@ describe("distribution ledger", () => {
 });
 
 // ==================================================================
-// Migration additivity: v7 must not disturb v1-v6.
+// Migration additivity: each new migration must not disturb earlier ones.
+// v8 only adds an index (idx_signals_dedupe), so the table list is unchanged.
 // ==================================================================
 
-describe("migration v7 is purely additive", () => {
-  test("a fresh database lands at user_version 7 with earlier tables intact", () => {
+describe("migration v8 is purely additive", () => {
+  test("a fresh database lands at user_version 8 with earlier tables intact", () => {
     const db = openMemoryDb();
     const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-    assert.equal(version, 7);
+    assert.equal(version, 8);
 
     const tables = new Set(
       (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>)

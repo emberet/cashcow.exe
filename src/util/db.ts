@@ -287,6 +287,16 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_distributions_period ON profit_distributions(period_end);
   `,
+
+  // v8 -- support the ingest-time dedupe check that stops a feed re-serving
+  // byte-identical content (a static 4chan sticky, polled every 120s) from
+  // inflating `observations` and `velocityOf`'s recent-half sum every poll.
+  // Index only -- no UNIQUE constraint, since existing databases already
+  // contain the duplicate rows this prevents going forward, and a unique
+  // index would fail to create against them.
+  `
+  CREATE INDEX idx_signals_dedupe ON signals(feed, source_text, ingested_at);
+  `,
 ];
 
 /**

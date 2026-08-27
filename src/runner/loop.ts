@@ -1,3 +1,4 @@
+import type { Keypair } from "@solana/web3.js";
 import type { Db } from "../util/db.ts";
 import { isPretend, type Config } from "../config/schema.ts";
 import { BudgetGuard, BudgetDenied } from "../risk/budget.ts";
@@ -14,7 +15,9 @@ import { pumpFunMarket } from "../chain/market.ts";
 import { generateIdentity, RiskyTrendError } from "../assets/naming.ts";
 import { renderTokenImage } from "../assets/image.ts";
 import { pinTokenMetadata } from "../assets/ipfs.ts";
-import { launchToken, estimateLaunchCostSol } from "../chain/launch.ts";
+import { launchToken, estimateLaunchCostSol, type LaunchResult } from "../chain/launch.ts";
+import { grindMintKeypairParallel } from "../chain/vanity.ts";
+import { availableParallelism } from "node:os";
 import { claimCreatorFees } from "../chain/fees.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
 import { loadWallet, publishWalletAddress } from "../chain/wallet.ts";
@@ -188,7 +191,7 @@ export async function launchTick(
   const results = await pollAll(ctx);
   const weights = new Map(enabledFeeds(cfg).map(({ adapter, weight }) => [adapter.id, weight]));
   const rawSignals = results.flatMap((r) => r.signals);
-  const phraseCount = ingestSignals(db, rawSignals, weights);
+  const phraseCount = ingestSignals(db, rawSignals, weights, cfg.scoring);
 
   const candidates = buildCandidates(db, cfg.scoring);
   stats.candidates = candidates.length;
@@ -369,7 +372,7 @@ async function launchCandidate(
     );
   }
 
-  const image = await renderTokenImage(cfg, identity);
+  const image = await renderTokenImage(cfg, identity, candidate.term);
   const pinned = await pinTokenMetadata(cfg, identity, image);
 
   const devBuySol = cfg.devPosition.enabled ? cfg.devPosition.buySol : 0;
@@ -377,12 +380,35 @@ async function launchCandidate(
   // Last gate before money moves.
   budget.assertCanSpend(estimate, { isLaunch: true, opensPosition: devBuySol > 0 });
 
+  let mintKeypair: Keypair | undefined;
+  if (cfg.launch.vanitySuffix) {
+    // Spread the grind across every available core rather than the caller's
+    // single thread -- see src/chain/vanity.ts for why this isn't optional
+    // for anything longer than a 1-2 char suffix.
+    const workers = cfg.launch.vanityWorkers ?? availableParallelism();
+    const ground = await grindMintKeypairParallel(
+      cfg.launch.vanitySuffix, cfg.launch.vanityTimeoutMs, workers,
+    );
+    if (ground) {
+      log.info("vanity mint address found", {
+        suffix: cfg.launch.vanitySuffix, attempts: ground.attempts, ms: ground.ms,
+        mint: ground.keypair.publicKey.toBase58(),
+      });
+      mintKeypair = ground.keypair;
+    } else {
+      log.warn("vanity grind timed out, using a random address", {
+        suffix: cfg.launch.vanitySuffix, timeoutMs: cfg.launch.vanityTimeoutMs,
+      });
+    }
+  }
+
   const result = await launchToken(cfg, {
     name: identity.name,
     symbol: identity.symbol,
     uri: pinned.uri,
     devBuySol,
     slippagePct: cfg.devPosition.buySlippagePct,
+    mintKeypair,
   });
 
   db.prepare(
@@ -395,19 +421,14 @@ async function launchCandidate(
     Date.now(), result.signature ?? null, isPretend(cfg) ? 1 : 0,
   );
 
-  // Prefer the measured wallet delta over the estimate, so the ledger
-  // reconciles against the chain instead of drifting by the transaction fee.
-  const launchCost = result.actualCostSol !== undefined
-    ? Math.max(0, result.actualCostSol - devBuySol)
-    : cfg.launch.estimatedCreateCostSol;
+  const { solDelta: launchCost, measured } = resolveLaunchCost(cfg, result, devBuySol);
 
   budget.record({
     kind: "launch",
     solDelta: -launchCost,
     mint: result.mint,
     signature: result.signature,
-    note: `${identity.symbol} <- "${candidate.term}"` +
-      (result.actualCostSol !== undefined ? " (measured)" : " (estimated)"),
+    note: `${identity.symbol} <- "${candidate.term}"` + (measured ? " (measured)" : " (estimated)"),
   });
 
   if (devBuySol > 0) {
@@ -438,10 +459,49 @@ async function launchCandidate(
   log.info("LAUNCHED", {
     mint: result.mint, name: identity.name, symbol: identity.symbol,
     term: candidate.term, score: candidate.score.toFixed(1),
-    feeds: candidate.feeds, devBuySol, naming: identity.source,
+    feeds: candidate.feeds, devBuySol, naming: identity.source, art: image.theme,
     url: `https://pump.fun/coin/${result.mint}`,
     dryRun: result.dryRun,
   });
+}
+
+/**
+ * What to book against spend_ledger for the "launch" row.
+ *
+ * Prefers the measured wallet delta over the estimate, so the ledger
+ * reconciles against the chain instead of drifting by the transaction fee.
+ * But a measured cost can only ever be non-negative -- create-and-buy cannot
+ * hand money back -- so a negative reading is not "spent nothing", it is
+ * proof the balance snapshot in chain/launch.ts overlapped a concurrent
+ * inflow (a creator-fee claim or a position sell landing mid-window). The old
+ * `Math.max(0, ...)` floor silently turned that corruption into a booked
+ * launch cost of exactly 0. chain/rpc.ts's withBalanceLock now serializes
+ * those windows so this should no longer happen in practice; this is the
+ * belt to that braces -- fail loud and fall back to the estimate rather than
+ * silently under-counting the day's spend against `risk.maxSolPerDay`.
+ */
+export function resolveLaunchCost(
+  cfg: Config, result: LaunchResult, devBuySol: number,
+): { solDelta: number; measured: boolean } {
+  if (result.actualCostSol === undefined) {
+    return { solDelta: cfg.launch.estimatedCreateCostSol, measured: false };
+  }
+
+  const measuredSol = result.actualCostSol - devBuySol;
+  if (measuredSol < 0) {
+    log.warn(
+      "measured launch cost came back negative -- a concurrent balance change likely " +
+      "landed inside the balance snapshot window; falling back to the estimate instead " +
+      "of flooring the ledger to 0",
+      {
+        mint: result.mint, actualCostSol: result.actualCostSol, devBuySol, measuredSol,
+        fallbackSol: cfg.launch.estimatedCreateCostSol,
+      },
+    );
+    return { solDelta: cfg.launch.estimatedCreateCostSol, measured: false };
+  }
+
+  return { solDelta: measuredSol, measured: true };
 }
 
 async function maybeTune(db: Db, cfg: Config): Promise<void> {

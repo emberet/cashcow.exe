@@ -76,7 +76,7 @@ understanding what it was protecting against.
 ## Commands
 
 ```bash
-npm test                       # 181 tests — run before every commit
+npm test                       # 235 tests — run before every commit
 npx tsc --noEmit               # typecheck (no build step; Node strips types)
 
 npm run preflight              # verify every credential BY USING IT; nothing is signed
@@ -149,7 +149,7 @@ generated identity, because the ticker does not exist until the model has run.
 - **`node:sqlite` returns null-prototype objects.** Fine to read, surprising to
   spread.
 - **Migrations are append-only** in `src/util/db.ts`. Never edit an existing one;
-  add the next. Currently at v7.
+  add the next. Currently at v8.
 - **`launch.simulate` builds the real transaction and simulates it.** Stronger
   evidence than `dryRun`, which never touches the chain. Both book against the
   pretend ledger via `isPretend()` — a simulation must never consume the real
@@ -168,6 +168,14 @@ generated identity, because the ticker does not exist until the model has run.
   `createV2AndBuy` (25) overflows with a real URI, so the v1 `createAndBuy`
   (23 accounts) is the only workable path until an address lookup table exists.
   Anything that adds an account or lengthens the URI will break launches.
+- **pump.fun's `searchTerm` is fuzzy across name AND symbol.** Searching
+  `CYBERLEEK` returns a 2025 coin called "Retarded CyberLeak Uri" whose ticker
+  is `P1SS`. So "an older coin came back from the search" does NOT mean "an
+  older coin has this ticker" — `ogCheck.ts` compares `normalizeSymbol()` on
+  each row, and without that it would brand the genuine OG a copycat. The same
+  endpoint also caps results, so "no earlier match found" only means something
+  once the page reaches past the candidate's own creation time; otherwise the
+  answer is `unknown`, not `og`.
 - **Some hosts are blocked from some networks.** Polymarket's Gamma API was
   unreachable from the build machine while every other host resolved. If a feed
   returns nothing, check reachability before assuming a parsing bug.
