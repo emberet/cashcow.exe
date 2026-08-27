@@ -1,11 +1,14 @@
 import { fetchJson } from "../util/http.ts";
 
 /**
- * DexScreener activity lookup for the historical backtest. No all-time
- * cumulative volume field exists on this API (or on pump.fun's), so
- * `ath_market_cap` from `pumpSample.ts` remains the primary activity proxy;
- * this supplies a secondary "still has real trading right now" check plus
- * the transaction-count input to the wash-trading-shaped heuristic.
+ * DexScreener activity lookup. Originally written for the historical backtest
+ * only; also used live now by `src/feeds/dexActivity.ts` to score organic
+ * buy-side imbalance on recently-migrated tokens (`src/scoring/organicFlow.ts`).
+ * No all-time cumulative volume field exists on this API (or on pump.fun's),
+ * so `ath_market_cap` from `pumpSample.ts` remains the primary activity proxy
+ * for the backtest; this supplies a secondary "still has real trading right
+ * now" check plus the transaction-count input to the wash-trading-shaped
+ * heuristic, in both callers.
  */
 
 const DEX_TOKEN = "https://api.dexscreener.com/latest/dex/tokens";

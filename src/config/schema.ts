@@ -277,6 +277,64 @@ export const feedsSchema = z.object({
     minMarketCapUsd: z.number().nonnegative().default(50_000),
     maxAgeHours: z.number().positive().default(48),
     limit: z.number().int().positive().max(200).default(60),
+    /**
+     * Rough estimate of pump.fun's graduation market cap in USD, used only to
+     * compute curveProgress (0..1 closeness to bonding-curve graduation).
+     * APPROXIMATE and drifts with SOL price / pump.fun's own curve parameters
+     * -- there is no reserve-level field on this endpoint to compute it
+     * exactly. Tune from observed graduations, not trusted as authoritative.
+     */
+    graduationMarketCapUsd: z.number().positive().default(100_000),
+    /** How much of rawScore comes from curveProgress vs size/freshness. Set
+     *  to 0 to disable the graduation-proximity signal without disabling the
+     *  whole feed. */
+    curveProgressWeight: z.number().min(0).max(1).default(0.25),
+  }).default({}),
+  dexActivity: z.object({
+    ...feedBase,
+    /**
+     * Off by default: unlike the other feeds, each poll fans out to up to
+     * `maxCandidatesPerPoll` DexScreener calls rather than one request. Ships
+     * off per the "safe by default" invariant until validated live with
+     * `npm run feeds`.
+     */
+    enabled: z.boolean().default(false),
+    pollSeconds: z.number().positive().default(600),
+    weight: z.number().min(0).default(0.4),
+    /**
+     * Proxy for "recently migrated": pump.fun's /coins endpoint has no true
+     * migration timestamp, only creation timestamp + a `complete` flag, so
+     * this filters on age-since-creation instead.
+     */
+    candidateMaxAgeHours: z.number().positive().default(72),
+    /** Caps DexScreener calls per poll. */
+    maxCandidatesPerPoll: z.number().int().positive().max(50).default(15),
+    concurrency: z.number().int().positive().max(10).default(3),
+    /** Below this, a buy/sell imbalance is too easy to move on thin liquidity
+     *  to mean anything. */
+    minLiquidityUsd: z.number().nonnegative().default(20_000),
+    /**
+     * Inclusive band on buys as a percentage of 24h transactions. Below the
+     * floor there's no real imbalance to report; above the ceiling is the
+     * same near-100%-buys pattern src/research/classify.ts's own
+     * DEFAULT_THRESHOLDS treats as an untested pump or wash-trading
+     * fingerprint, not stronger organic accumulation -- so the signal is
+     * deliberately NOT monotonic past this ceiling.
+     *
+     * UNVALIDATED DEFAULTS -- checked against 25 real graduated pump.fun
+     * coins (2026-08-27): freshly-migrated tokens clustered at 86-98% buy
+     * share (above this ceiling), long-settled ones at 38-55% (below this
+     * floor); only one sample landed inside 60-85, near the ceiling. Left
+     * as-is rather than fit to a 25-sample snapshot -- validate against
+     * `backtest-launches` / a longer `npm run feeds` sample before flipping
+     * `enabled: true`, per the feed's own "ships off until validated" doc
+     * comment above.
+     */
+    minBuyShareForSignal: z.number().min(50).max(100).default(60),
+    maxBuyShareForSignal: z.number().min(50).max(100).default(85),
+    /** Reuses classify.ts's washSuspicionScore (txCount/replies) as a hard
+     *  dampener; above this the signal is zeroed regardless of buy share. */
+    maxWashSuspicionScore: z.number().positive().default(5),
   }).default({}),
 }).default({});
 

@@ -25,6 +25,11 @@ export type Family =
 export const FEED_FAMILY: Record<string, Family> = {
   fourchan: "crypto",
   onchain: "crypto",
+  // Same crypto-native population as onchain (both read pump.fun's own
+  // /coins listing) -- deliberately NOT a new independent family. Inventing
+  // one here would inflate corroboration for two feeds reading the same
+  // underlying market, exactly the failure this whole model exists to avoid.
+  dexActivity: "crypto",
   farcaster: "crypto",
   googleTrends: "search",
   wikipedia: "search",

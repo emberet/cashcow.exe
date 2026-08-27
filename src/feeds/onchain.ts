@@ -32,6 +32,32 @@ const BROWSERISH =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+/**
+ * 0..1 estimate of closeness to pump.fun's bonding-curve graduation.
+ *
+ * APPROXIMATION: this endpoint carries `usd_market_cap` and a `complete`
+ * flag, not the on-chain reserve state, so this is `mcap / graduationMarketCapUsd`
+ * clamped to 0..1 -- not the true reserve fraction. A real reserve read needs a
+ * per-mint RPC call via `@pump-fun/pump-sdk`; `src/chain/holders.ts`'s closest
+ * analog (`getTokenLargestAccounts`) fails against the free public mainnet RPC
+ * almost every time (see test/research.test.ts), and fanning that out across
+ * every candidate on a 90s cadence is not viable. So this stays an estimate,
+ * clearly labelled as one.
+ *
+ * Always 0 once graduated: being close to a threshold already crossed is
+ * stale information, not momentum, and gmgn.ai's own "almost_bonded" bucket
+ * stops meaning anything the moment a token migrates.
+ */
+export function curveProgress(
+  usdMarketCap: number,
+  graduated: boolean,
+  graduationMarketCapUsd: number,
+): number {
+  if (graduated) return 0;
+  if (usdMarketCap <= 0 || graduationMarketCapUsd <= 0) return 0;
+  return clamp01(usdMarketCap / graduationMarketCapUsd);
+}
+
 export const onchainFeed: FeedAdapter = {
   id: "onchain",
   weight: 0.5,
@@ -73,18 +99,30 @@ export const onchainFeed: FeedAdapter = {
       const size = logNorm(mcap, 10_000_000);
       // Younger is a stronger signal for the same size.
       const freshness = clamp01(1 - ageMs / maxAgeMs);
+      const graduated = coin.complete === true;
+      // gmgn.ai-inspired addition: reward tokens visibly closing in on
+      // graduation ("almost_bonded"), not just big-and-young ones. Weight is
+      // configurable (curveProgressWeight) so it can be zeroed without
+      // disabling the feed; the other two weights are reduced to compensate
+      // so this feed's overall influence (weight 0.5, "corroboration only")
+      // does not grow.
+      const progress = curveProgress(mcap, graduated, c.graduationMarketCapUsd);
+      const w = clamp01(c.curveProgressWeight);
+      const sizeWeight = 0.6 * (1 - w);
+      const freshnessWeight = 0.4 * (1 - w);
 
       out.push({
         feed: "onchain",
         term,
-        rawScore: 0.6 * size + 0.4 * freshness,
+        rawScore: sizeWeight * size + freshnessWeight * freshness + w * progress,
         observedAt: new Date(created),
         url: coin.mint ? `https://pump.fun/coin/${coin.mint}` : undefined,
         meta: {
           symbol, mint: coin.mint, marketCapUsd: Math.round(mcap),
           ageHours: Math.round(ageMs / 3600_000),
           replies: coin.reply_count ?? 0,
-          graduated: coin.complete === true,
+          graduated,
+          curveProgress: progress,
           kind: "fast-follow",
         },
       });

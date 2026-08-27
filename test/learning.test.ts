@@ -11,7 +11,7 @@ import { sanitise, writeOverlay, readOverlay, clearOverlay } from "../src/learni
 import { computeCapacity, costPerLaunch, balanceNeededFor, newsVolumeScale } from "../src/risk/capacity.ts";
 import { BudgetGuard } from "../src/risk/budget.ts";
 import { recordLaunch, outcomeSummary } from "../src/learning/outcomes.ts";
-import { corroborationStrength, distinctFamilies } from "../src/scoring/independence.ts";
+import { corroborationStrength, distinctFamilies, familyOf } from "../src/scoring/independence.ts";
 
 const cfg = (over: Record<string, unknown> = {}) => configSchema.parse({ dryRun: false, ...over });
 
@@ -416,9 +416,19 @@ describe("source independence", () => {
 
   test("every registered feed has a family", () => {
     for (const f of ["googleTrends", "reddit", "xApi", "fourchan", "farcaster",
-                     "polymarket", "onchain", "hackernews", "googleNews", "wikipedia"]) {
+                     "polymarket", "onchain", "dexActivity", "hackernews", "googleNews", "wikipedia"]) {
       assert.equal(distinctFamilies([f]).length, 1, `${f} has no family`);
     }
+  });
+
+  test("onchain and dexActivity are explicitly mapped, not defaulted", () => {
+    // familyOf() silently defaults an UNMAPPED feed id to "social" -- the test
+    // above would not catch a forgotten FEED_FAMILY entry, since a default
+    // mapping still produces exactly one family. This asserts the actual
+    // intended family so a future dropped entry fails loudly instead of
+    // silently inflating a crypto-native feed into an independent population.
+    assert.equal(familyOf("onchain"), "crypto");
+    assert.equal(familyOf("dexActivity"), "crypto");
   });
 });
 
