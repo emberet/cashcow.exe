@@ -217,6 +217,15 @@ describe("filters — reject before anything costs money", () => {
     }
   });
 
+  test("blocks bare cabinet-official surnames", () => {
+    // "Bessent" (US Treasury Secretary) launched for real on mainnet: a lone
+    // surname is invisible to the two-word heuristic, and the model screen
+    // missed it too. Same shape as the "Trump" leak that seeded this list.
+    for (const term of ["Bessent", "Powell", "Yellen"]) {
+      assert.equal(checkTerm(term, f).allowed, false, `expected "${term}" blocked`);
+    }
+  });
+
   test("person-name heuristic does not eat obvious non-people", () => {
     for (const term of ["skibidi toilet", "brat summer", "LINK", "Apollo 15", "World Water Reserve"]) {
       assert.equal(checkTerm(term, f).allowed, true, `expected "${term}" to pass`);

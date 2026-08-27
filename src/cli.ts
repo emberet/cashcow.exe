@@ -211,7 +211,7 @@ async function main() {
       }
       console.log("\n  checking each credential by using it, not by testing it is non-empty\n");
       const forMainnet = flags.get("for-mainnet") === true;
-      const results = await runPreflight(db, cfg, forMainnet);
+      const results = await runPreflight(db, cfg, ctx, forMainnet);
       const mark = { ok: "  ok  ", warn: " warn ", fail: " FAIL " };
       for (const r of results) {
         console.log(`  [${mark[r.status]}] ${r.name.padEnd(24)} ${r.detail}`);

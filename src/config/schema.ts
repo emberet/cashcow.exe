@@ -293,12 +293,12 @@ export const feedsSchema = z.object({
   dexActivity: z.object({
     ...feedBase,
     /**
-     * Off by default: unlike the other feeds, each poll fans out to up to
-     * `maxCandidatesPerPoll` DexScreener calls rather than one request. Ships
-     * off per the "safe by default" invariant until validated live with
-     * `npm run feeds`.
+     * On as of 2026-08-28, after the buy-share ceiling below was corrected to
+     * match where real graduated coins actually sit. Note this feed is unlike
+     * the others: each poll fans out to up to `maxCandidatesPerPoll`
+     * DexScreener calls rather than one request.
      */
-    enabled: z.boolean().default(false),
+    enabled: z.boolean().default(true),
     pollSeconds: z.number().positive().default(600),
     weight: z.number().min(0).default(0.4),
     /**
@@ -321,17 +321,21 @@ export const feedsSchema = z.object({
      * fingerprint, not stronger organic accumulation -- so the signal is
      * deliberately NOT monotonic past this ceiling.
      *
-     * UNVALIDATED DEFAULTS -- checked against 25 real graduated pump.fun
-     * coins (2026-08-27): freshly-migrated tokens clustered at 86-98% buy
-     * share (above this ceiling), long-settled ones at 38-55% (below this
-     * floor); only one sample landed inside 60-85, near the ceiling. Left
-     * as-is rather than fit to a 25-sample snapshot -- validate against
-     * `backtest-launches` / a longer `npm run feeds` sample before flipping
-     * `enabled: true`, per the feed's own "ships off until validated" doc
-     * comment above.
+     * The ceiling was 85 and is now 95, from the one real calibration sample
+     * on file: 25 graduated pump.fun coins (2026-08-27) put freshly-migrated
+     * tokens at 86-98% buy share and long-settled ones at 38-55%, so at 85
+     * this feed scored near-zero for almost exactly the population it exists
+     * to detect. 95 rather than 98 leaves the very top of that cluster still
+     * reading as suspicious; actual wash trading inside the wider band is
+     * caught by `maxWashSuspicionScore` below, which is a separate signal
+     * (tx-count vs replies) rather than more ceiling.
+     *
+     * Still a 25-sample basis -- confirm with `node src/cli.ts feeds --feed
+     * dexActivity` that live scores are non-zero AND still discriminating
+     * (not everything pinned near the ceiling).
      */
     minBuyShareForSignal: z.number().min(50).max(100).default(60),
-    maxBuyShareForSignal: z.number().min(50).max(100).default(85),
+    maxBuyShareForSignal: z.number().min(50).max(100).default(95),
     /** Reuses classify.ts's washSuspicionScore (txCount/replies) as a hard
      *  dampener; above this the signal is zeroed regardless of buy share. */
     maxWashSuspicionScore: z.number().positive().default(5),

@@ -419,4 +419,15 @@ describe("affinity — separates trends with buyers from trends without", () => 
   test("tickerability favours short punchy terms", () => {
     assert.ok(tickerability("labubu") > tickerability("the great international banana shortage of 2026"));
   });
+
+  // Each of these launched for real on mainnet and never traded past its own
+  // dev buy. They read as news to a feed but carry nothing anyone would buy a
+  // token for, which is exactly what the DRY penalty exists to catch.
+  test("vocabulary from real zero-traction duds is penalised", () => {
+    const memey = cryptoAffinity("capybara meme", ["googleNews"]);
+    for (const dud of ["momentum", "cancer drug", "maryland", "spread"]) {
+      const score = cryptoAffinity(dud, ["googleNews"]);
+      assert.ok(score < memey, `expected "${dud}" (${score}) to score below a memeable term (${memey})`);
+    }
+  });
 });
