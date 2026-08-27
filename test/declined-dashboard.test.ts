@@ -30,7 +30,7 @@ describe("declined-list display collapses repeat entries", () => {
   }
 
   // Offset well into the past: recentDeclines/crowdedDetail filter on
-  // `ts < Date.now()` at query time (delayHours=0 for admin), so a row
+  // `ts < Date.now()` at query time (delayMinutes=0 for admin), so a row
   // seeded at exactly "now" can lose a same-millisecond race against the
   // query's own Date.now() call and be silently excluded.
   const PAST = 60_000;

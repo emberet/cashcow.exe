@@ -209,9 +209,9 @@ function render(d) {
     : `<div class="card empty">No coins yet. It only burps when a trend clears every gate.</div>`;
 
   // --- declines
-  delayHours = d.declineDelayHours ?? 6;
-  $("decline-delay").textContent = d.declineDelayHours
-    ? `${d.declineDelayHours}-hour delay` : "live";
+  delayMinutes = d.declineDelayMinutes ?? 5;
+  $("decline-delay").textContent = d.declineDelayMinutes
+    ? `${d.declineDelayMinutes}-min delay` : "live";
   $("declines").innerHTML = (d.declines || []).length
     ? d.declines.map((x) => `
         <div class="dashrow" style="grid-template-columns:1fr auto">
@@ -507,13 +507,13 @@ function renderGateDetail() {
     // An empty delayed list is the normal early state, not a fault. Say which.
     : (g.delayed
       ? `<div class="empty" style="padding:18px 0">Nothing has aged past the
-         ${esc(String(delayHours))}-hour delay yet. Anything turned away in the last
-         ${esc(String(delayHours))} hours appears here once it is old enough to be
+         ${esc(String(delayMinutes))}-min delay yet. Anything turned away in the last
+         ${esc(String(delayMinutes))} minutes appears here once it is old enough to be
          useless to a front-runner.</div>`
       : "");
 
   const delayed = g.delayed ? `
-    <p class="note"><strong>Held back ${esc(String(delayHours))} hours.</strong>
+    <p class="note"><strong>Held back ${esc(String(delayMinutes))} minutes.</strong>
     Naming these live would tell you what the cow is looking at right now.</p>` : "";
 
   panel.innerHTML = `
@@ -541,7 +541,7 @@ function renderGateDetail() {
   // clicked, so moving the page under the reader would be an unrequested jump.
 }
 
-let delayHours = 6;
+let delayMinutes = 5;
 window.addEventListener("hashchange", renderGateDetail);
 window.addEventListener("keydown", (e) => { if (e.key === "Escape" && currentGate()) closeDetail(); });
 // Column count changes at breakpoints, which moves which row a gate sits in.

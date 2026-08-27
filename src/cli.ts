@@ -295,7 +295,7 @@ async function main() {
 
     case "declined": {
       const limit = flags.get("limit") ? Number(flags.get("limit")) : 20;
-      // delayHours: 0 -- this is the operator's own terminal, not the public
+      // delayMinutes: 0 -- this is the operator's own terminal, not the public
       // dashboard, so there's no reason to withhold what the bot is currently
       // looking at (see recentDeclines()'s doc comment for why the public
       // page delays it).

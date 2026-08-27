@@ -23,6 +23,7 @@ import { overlaySummary } from "../learning/overlay.ts";
  * invitation to be front-run by anyone watching the page.
  */
 
+const MINUTE = 60_000;
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
 
@@ -374,8 +375,8 @@ function suffixCount(note: string, count: number): string {
 /**
  * Recently declined candidates.
  *
- * `delayHours` exists because a live rejection feed still leaks what the bot is
- * looking at right now. Delayed, it becomes an honest record of judgement
+ * `delayMinutes` exists because a live rejection feed still leaks what the bot
+ * is looking at right now. Delayed, it becomes an honest record of judgement
  * rather than a tip sheet. Admin passes 0; the public page does not.
  *
  * Fetches a wider raw window than `limit` and collapses same-term-and-reason
@@ -383,13 +384,13 @@ function suffixCount(note: string, count: number): string {
  * text) before slicing, so `limit` distinct decisions are returned rather
  * than `limit` rows that might all be the same decision repeated.
  */
-export function recentDeclines(db: Db, cfg: Config, delayHours: number, limit = 8) {
+export function recentDeclines(db: Db, cfg: Config, delayMinutes: number, limit = 8) {
   const fetchLimit = Math.min(limit * 8, 200);
   const rows = db.prepare(
     `SELECT term, norm, reason, detail, score, ts FROM declined
       WHERE dry_run = ? AND ts < ?
       ORDER BY ts DESC LIMIT ?`,
-  ).all(mode(cfg), Date.now() - delayHours * HOUR, fetchLimit) as Array<Record<string, unknown>>;
+  ).all(mode(cfg), Date.now() - delayMinutes * MINUTE, fetchLimit) as Array<Record<string, unknown>>;
 
   const mapped = rows.map((r) => ({
     term: String(r.term),
@@ -584,13 +585,13 @@ function scoreHistogram(db: Db, cfg: Config) {
 }
 
 /** Competitor counts parsed out of the saturation reason we already stored. */
-export function crowdedDetail(db: Db, cfg: Config, delayHours: number, limit = 10) {
+export function crowdedDetail(db: Db, cfg: Config, delayMinutes: number, limit = 10) {
   const fetchLimit = Math.min(limit * 8, 200);
   const rows = db.prepare(
     `SELECT term, norm, detail, ts FROM declined
       WHERE dry_run = ? AND reason = 'crowded' AND ts < ?
       ORDER BY ts DESC LIMIT ?`,
-  ).all(mode(cfg), Date.now() - delayHours * HOUR, fetchLimit) as Array<Record<string, unknown>>;
+  ).all(mode(cfg), Date.now() - delayMinutes * MINUTE, fetchLimit) as Array<Record<string, unknown>>;
 
   const mapped = rows.map((r) => ({
     term: String(r.term),
@@ -619,10 +620,10 @@ export function crowdedDetail(db: Db, cfg: Config, delayHours: number, limit = 1
  * statistical; gates 5-7 name terms only from the delayed record; gate 8 is
  * already fully public because the tokens exist on chain.
  */
-export function gateDetails(db: Db, cfg: Config, delayHours: number) {
+export function gateDetails(db: Db, cfg: Config, delayMinutes: number) {
   const f = pipelineFunnel(db, cfg);
   const g = (i: number) => f.gates[i];
-  const declines = recentDeclines(db, cfg, delayHours, 40);
+  const declines = recentDeclines(db, cfg, delayMinutes, 40);
   const byFeed = signalsByFeed(db, 24);
   const totalSignals = byFeed.reduce((n, r) => n + r.n, 0);
 
@@ -714,7 +715,7 @@ export function gateDetails(db: Db, cfg: Config, delayHours: number) {
         { label: "Already taken", value: f.crowdedOut ?? 0 },
         { label: "Rival limit", value: cfg.saturation.maxSimilar },
       ],
-      rows: crowdedDetail(db, cfg, delayHours).map((c) => ({
+      rows: crowdedDetail(db, cfg, delayMinutes).map((c) => ({
         term: c.term,
         note: suffixCount(c.rivals != null ? `${c.rivals} rival coins` : "already minted", c.count),
         tone: "pink",
@@ -814,9 +815,9 @@ export function publicSnapshot(db: Db, cfg: Config, kill: KillSwitch) {
     stats: headlineStats(db, cfg),
     funnel: pipelineFunnel(db, cfg),
     // Public sees declines only after a delay -- see recentDeclines().
-    declines: recentDeclines(db, cfg, cfg.web.declineDelayHours),
-    declineDelayHours: cfg.web.declineDelayHours,
-    gateDetails: gateDetails(db, cfg, cfg.web.declineDelayHours),
+    declines: recentDeclines(db, cfg, cfg.web.declineDelayMinutes),
+    declineDelayMinutes: cfg.web.declineDelayMinutes,
+    gateDetails: gateDetails(db, cfg, cfg.web.declineDelayMinutes),
     reading: readingList(db, cfg, 24),
     claims: feeClaims(db, cfg),
     nextPollSeconds: nextPollSeconds(db, cfg),

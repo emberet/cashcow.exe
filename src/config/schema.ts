@@ -603,7 +603,7 @@ export const configSchema = z.object({
      * now; delayed, it is an honest record instead of a tip sheet. The admin
      * portal is unaffected.
      */
-    declineDelayHours: z.number().nonnegative().default(6),
+    declineDelayMinutes: z.number().nonnegative().default(5),
     /**
      * Show the dev wallet address and balance on the PUBLIC page.
      *

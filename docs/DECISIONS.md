@@ -227,7 +227,7 @@ it is the whole "where did the day go" story. But a live feed of *which* terms
 were just rejected still reveals what the bot is looking at right now.
 
 **Decision.** Aggregate funnel counts publish live; the named decline list is
-held back by `web.declineDelayHours` (default 6). The admin portal sees both
+held back by `web.declineDelayMinutes` (default 5). The admin portal sees both
 immediately, since there is nothing to front-run yourself.
 
 **A bug this caused, and the rule it produced.** The "right now" banner
