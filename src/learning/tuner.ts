@@ -7,6 +7,7 @@ import {
   applyChanges, describeMandate, type Change, type ApplyResult,
 } from "./guardrails.ts";
 import { redactedConfig } from "../web/queries.ts";
+import { appendSelfImprovementEntry } from "./selfImprovementLog.ts";
 
 /**
  * The learning loop.
@@ -187,7 +188,7 @@ export async function runTuning(db: Db, cfg: Config): Promise<TuningRun> {
   const evidence = gatherEvidence(db, cfg);
 
   if (evidence.sampleSize < cfg.learning.minSampleSize) {
-    return {
+    const run: TuningRun = {
       ran: false,
       reason:
         `only ${evidence.sampleSize} settled launches, need ${cfg.learning.minSampleSize}. ` +
@@ -195,16 +196,20 @@ export async function runTuning(db: Db, cfg: Config): Promise<TuningRun> {
       sampleSize: evidence.sampleSize,
       applied: false,
     };
+    appendSelfImprovementEntry(db, cfg, run);
+    return run;
   }
 
   const apiKey = process.env[cfg.learning.apiKeyEnv];
   if (!apiKey) {
-    return {
+    const run: TuningRun = {
       ran: false,
       reason: `${cfg.learning.apiKeyEnv} is not set`,
       sampleSize: evidence.sampleSize,
       applied: false,
     };
+    appendSelfImprovementEntry(db, cfg, run);
+    return run;
   }
 
   const proposal = await askModel(cfg, evidence, apiKey);
@@ -235,13 +240,15 @@ export async function runTuning(db: Db, cfg: Config): Promise<TuningRun> {
     log.warn("tuning proposals rejected by guardrails", { rejected: result.rejected });
   }
 
-  return {
+  const run: TuningRun = {
     ran: true,
     sampleSize: evidence.sampleSize,
     rationale: proposal.rationale,
     result,
     applied: apply,
   };
+  appendSelfImprovementEntry(db, cfg, run);
+  return run;
 }
 
 async function askModel(
