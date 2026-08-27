@@ -29,6 +29,17 @@ export type SpendRecord = {
   mint?: string;
   signature?: string;
   note?: string;
+  /**
+   * Which ledger this settles against. Defaults to the guard's own mode
+   * (the config this process started with), which is correct for spend that
+   * originates and settles within one tick -- a launch and its dev_buy.
+   *
+   * A position's exit can land in a different process run than its open, so
+   * it must carry the position's OWN dry_run forward rather than inherit
+   * whatever config happens to be active when the sell settles. Passing it
+   * explicitly here is what keeps the two in sync.
+   */
+  dryRun?: boolean;
 };
 
 export type Decision =
@@ -195,12 +206,13 @@ export class BudgetGuard {
 
   /** Append the actual outcome. Call after the transaction settles, win or lose. */
   record(rec: SpendRecord): void {
+    const mode = rec.dryRun === undefined ? this.#mode : (rec.dryRun ? 1 : 0);
     this.#db.prepare(
       `INSERT INTO spend_ledger (ts, kind, mint, sol_delta, signature, dry_run, note)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       Date.now(), rec.kind, rec.mint ?? null, rec.solDelta,
-      rec.signature ?? null, this.#mode, rec.note ?? null,
+      rec.signature ?? null, mode, rec.note ?? null,
     );
     log.debug("ledger", { kind: rec.kind, solDelta: rec.solDelta, mint: rec.mint });
   }
