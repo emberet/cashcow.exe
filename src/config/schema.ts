@@ -346,6 +346,17 @@ export const assetsSchema = z.object({
      */
     width: z.number().int().positive().default(1000),
     height: z.number().int().positive().default(1000),
+    /**
+     * Pick the artwork template from the trend text (see assets/theme.ts):
+     * a terminal/ASCII face for AI and compute trends, a loud meme-poster face
+     * for political ones, the gradient monogram for everything else.
+     *
+     * Off by default so the repo default keeps rendering exactly what it
+     * rendered before. Purely cosmetic either way -- every template is drawn
+     * locally from primitives, costs nothing per launch, and reproduces from
+     * the ticker alone.
+     */
+    themed: z.boolean().default(false),
   }).default({}),
   ipfs: z.object({
     provider: z.literal("pinata").default("pinata"),
@@ -424,6 +435,33 @@ export const configSchema = z.object({
      * the network and no lamports move.
      */
     simulate: z.boolean().default(false),
+    /**
+     * If set, grind a mint keypair whose address ends in this suffix before
+     * launching (e.g. "pump", matching pump.fun's own frontend vanity
+     * convention -- cosmetic only, not required by the on-chain program).
+     * Off by default: it adds latency to every launch it touches, so it must
+     * be opted into per-run via an override, never silently on for the
+     * automated pipeline.
+     */
+    vanitySuffix: z.string().optional(),
+    /**
+     * Give up and fall back to a random address rather than stall a launch.
+     *
+     * Measured on the deploy machine at ~9,400 Keypair.generate()/sec/core, a
+     * 4-char suffix needs ~11.3M expected attempts -- the earlier 45s default
+     * was sized for a "quick grind" assumption that turned out wrong by ~40x.
+     * 300s gives real headroom (not just the expected case but the geometric
+     * distribution's tail) once spread across `vanityWorkers` cores; grinding
+     * a longer suffix or running on fewer cores will still time out and fall
+     * back to a random address, which is the intended fail-open behaviour.
+     */
+    vanityTimeoutMs: z.number().positive().default(300_000),
+    /**
+     * OS threads to spread the grind across. Unset uses every core the
+     * runtime reports available (`os.availableParallelism()`), since the
+     * search is independent per-worker and near-linear in core count.
+     */
+    vanityWorkers: z.number().int().positive().optional(),
   }).default({}),
   risk: riskSchema.default({}),
   devPosition: devPositionSchema.default({}),
