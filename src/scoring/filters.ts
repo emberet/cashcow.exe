@@ -72,6 +72,10 @@ const PUBLIC_FIGURES = [
   "musk", "bezos", "zuckerberg", "beyonce", "rihanna", "drake", "eminem",
   "messi", "ronaldo", "lebron", "jordan", "brady", "federer", "nadal",
   "swift", "adele", "madonna", "oprah", "kardashian", "jenner", "bieber",
+  // "Bessent" (US Treasury Secretary) launched for real on mainnet -- both this
+  // list and the model screen missed it. Sitting cabinet officials trend under
+  // a bare surname the same way heads of state do.
+  "bessent", "powell", "yellen", "rubio", "vance",
 ];
 
 /** Death, violence and disaster. */

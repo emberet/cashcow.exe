@@ -5,6 +5,8 @@ import type { Db } from "../util/db.ts";
 import { authState } from "../web/auth.ts";
 import { httpFetch } from "../util/http.ts";
 import { redactEndpoint } from "../chain/rpc.ts";
+import { enabledFeeds } from "../feeds/registry.ts";
+import type { FeedContext } from "../feeds/types.ts";
 
 /**
  * Pre-flight for a live run.
@@ -158,6 +160,35 @@ async function checkWallet(cfg: Config): Promise<CheckResult[]> {
   return out;
 }
 
+/**
+ * Which enabled feeds cannot actually poll.
+ *
+ * A feed with a missing credential stays `enabled: true` in config and fails
+ * `readiness()` on every tick, logging one line nobody reads. Reddit and
+ * Farcaster sat dead this way long enough to starve two of the five
+ * independence families that corroboration is scored on, while preflight
+ * reported all green -- it only ever checked launch-path credentials.
+ */
+const FEED_SIGNUP: Record<string, string> = {
+  reddit: "https://www.reddit.com/prefs/apps",
+  farcaster: "https://neynar.com/",
+  xApi: "https://developer.x.com/en/portal/dashboard",
+};
+
+function checkFeeds(ctx: FeedContext): CheckResult[] {
+  const feeds = enabledFeeds(ctx.cfg);
+  const dead: CheckResult[] = [];
+
+  for (const { adapter } of feeds) {
+    const ready = adapter.readiness(ctx);
+    if (ready.ready) continue;
+    dead.push(WARN(`Feed: ${adapter.id}`,
+      `enabled but cannot poll — ${ready.reason}`, FEED_SIGNUP[adapter.id]));
+  }
+
+  return dead.length ? dead : [OK("Feeds", `all ${feeds.length} enabled feeds can poll`)];
+}
+
 /** Config combinations that decide how much can be lost. */
 function checkPosture(db: Db, cfg: Config): CheckResult[] {
   const out: CheckResult[] = [];
@@ -196,7 +227,9 @@ function checkPosture(db: Db, cfg: Config): CheckResult[] {
  *                    whether you are ready, because startup refuses mainnet
  *                    until the very keys you are checking for are present.
  */
-export async function runPreflight(db: Db, cfg: Config, forMainnet = false): Promise<CheckResult[]> {
+export async function runPreflight(
+  db: Db, cfg: Config, ctx: FeedContext, forMainnet = false,
+): Promise<CheckResult[]> {
   const [anthropic, pinata, rpc, wallet] = await Promise.all([
     checkAnthropic(cfg, forMainnet),
     checkPinata(cfg, forMainnet),
@@ -208,7 +241,7 @@ export async function runPreflight(db: Db, cfg: Config, forMainnet = false): Pro
     posture.unshift(WARN("Target",
       `judging readiness for MAINNET while config says ${cfg.network}`));
   }
-  return [...posture, anthropic, pinata, ...rpc, ...wallet];
+  return [...posture, anthropic, pinata, ...rpc, ...wallet, ...checkFeeds(ctx)];
 }
 
 export const SETUP_LINKS = `
