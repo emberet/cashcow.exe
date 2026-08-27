@@ -425,9 +425,15 @@ describe("affinity — separates trends with buyers from trends without", () => 
   // token for, which is exactly what the DRY penalty exists to catch.
   test("vocabulary from real zero-traction duds is penalised", () => {
     const memey = cryptoAffinity("capybara meme", ["googleNews"]);
+    // Neutral term (no CRYPTO, MEMEABLE, or DRY words) establishes the baseline prior for googleNews.
+    const neutral = cryptoAffinity("unclassified term", ["googleNews"]);
     for (const dud of ["momentum", "cancer drug", "maryland", "spread"]) {
       const score = cryptoAffinity(dud, ["googleNews"]);
       assert.ok(score < memey, `expected "${dud}" (${score}) to score below a memeable term (${memey})`);
+      // The real regression guard: dud terms must score BELOW the neutral baseline,
+      // proving the DRY penalty is active. Without this, removing the DRY logic would
+      // leave these at 0.3 (the prior), still passing the memey < 0.7 check above.
+      assert.ok(score < neutral, `expected "${dud}" (${score}) to score below neutral baseline (${neutral}), proving DRY penalty is applied`);
     }
   });
 });
