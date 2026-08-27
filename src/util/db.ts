@@ -287,7 +287,67 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_distributions_period ON profit_distributions(period_end);
   `,
+
+  // v8 -- support the ingest-time dedupe check that stops a feed re-serving
+  // byte-identical content (a static 4chan sticky, polled every 120s) from
+  // inflating `observations` and `velocityOf`'s recent-half sum every poll.
+  // Index only -- no UNIQUE constraint, since existing databases already
+  // contain the duplicate rows this prevents going forward, and a unique
+  // index would fail to create against them.
+  `
+  CREATE INDEX idx_signals_dedupe ON signals(feed, source_text, ingested_at);
+  `,
 ];
+
+/**
+ * How long a writer waits for a lock before giving up. Generous on purpose:
+ * the alternative is a hard crash, and nothing here is latency-sensitive.
+ */
+export const BUSY_TIMEOUT_MS = 5000;
+
+/** Bounded retry for the one statement that ignores `busy_timeout`. */
+export const WAL_RETRIES = 25;
+export const WAL_RETRY_MS = 100;
+
+/** Blocking sleep. node:sqlite is synchronous, so there is no event loop to yield to. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Put the database in WAL mode, tolerating another process doing the same.
+ *
+ * This is the line that actually crashed the public web server at boot
+ * (`db.ts:298`, "database is locked"). Two things make it special, and both
+ * were missed the first time this was "fixed":
+ *
+ *  1. **Changing journal_mode needs exclusive access, and it does NOT honour
+ *     `busy_timeout`.** SQLite returns SQLITE_BUSY immediately without ever
+ *     invoking the busy handler, so no timeout value can protect it. Measured:
+ *     with busy_timeout at 3000ms it still failed in 0ms.
+ *  2. **Reading the mode is an ordinary read** and needs no exclusive lock.
+ *
+ * So: read first and skip the write entirely when the file is already WAL,
+ * which is the normal case on every boot after the first. Only a genuine
+ * conversion contends, and that is what the bounded retry covers -- the loser
+ * of a first-run race just needs the winner to finish.
+ */
+function ensureWal(db: Db): void {
+  const read = () => (db.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode;
+  if (read().toLowerCase() === "wal") return;
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      db.exec("PRAGMA journal_mode = WAL");
+      return;
+    } catch (err) {
+      // The other process may have completed the conversion for us.
+      if (read().toLowerCase() === "wal") return;
+      if (attempt >= WAL_RETRIES) throw err;
+      sleepSync(WAL_RETRY_MS);
+    }
+  }
+}
 
 export function openDb(dbPath: string): Db {
   if (handle) return handle;
@@ -295,10 +355,17 @@ export function openDb(dbPath: string): Db {
   mkdirSync(dirname(abs), { recursive: true });
 
   const db = new DatabaseSync(abs);
-  db.exec("PRAGMA journal_mode = WAL");
+
+  // FIRST, before anything that can contend. busy_timeout only affects
+  // statements executed after it, so ordering here is load-bearing rather than
+  // stylistic: two processes open this file (the bot and the public web
+  // server), and SQLite's default timeout is 0 -- contention fails INSTANTLY
+  // instead of waiting. At a few writes per minute, waiting is free.
+  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   db.exec("PRAGMA foreign_keys = ON");
   // Durability matters more than throughput here; we write a few rows per minute.
   db.exec("PRAGMA synchronous = FULL");
+  ensureWal(db);
 
   migrate(db);
   handle = db;

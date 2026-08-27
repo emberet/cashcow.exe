@@ -7,6 +7,7 @@ import { fourchanFeed } from "./fourchan.ts";
 import { farcasterFeed } from "./farcaster.ts";
 import { polymarketFeed } from "./polymarket.ts";
 import { onchainFeed } from "./onchain.ts";
+import { dexActivityFeed } from "./dexActivity.ts";
 import { hackernewsFeed } from "./hackernews.ts";
 import { googleNewsFeed } from "./googleNews.ts";
 import { wikipediaFeed } from "./wikipedia.ts";
@@ -20,6 +21,7 @@ const ALL: Record<string, FeedAdapter> = {
   farcaster: farcasterFeed,
   polymarket: polymarketFeed,
   onchain: onchainFeed,
+  dexActivity: dexActivityFeed,
   hackernews: hackernewsFeed,
   googleNews: googleNewsFeed,
   wikipedia: wikipediaFeed,

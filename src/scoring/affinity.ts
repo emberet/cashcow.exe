@@ -12,6 +12,8 @@ import { tokens } from "../util/text.ts";
 const FEED_PRIOR: Record<string, number> = {
   fourchan: 0.85,
   onchain: 0.9,
+  // Real on-chain trading data, comparable footing to onchain's prior.
+  dexActivity: 0.85,
   farcaster: 0.7,
   xApi: 0.55,
   polymarket: 0.55,

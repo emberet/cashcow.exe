@@ -163,7 +163,9 @@ function render(d) {
       <div class="sub">SOL. Creator-fee milk, minus what the dev positions trampled.</div>
     </div>
     <div class="plate">
-      <div class="label">Creator-fee milk</div>
+      ${d.wallet && d.wallet.creatorRewardsUrl
+        ? `<a href="${esc(d.wallet.creatorRewardsUrl)}" target="_blank" rel="noopener noreferrer" class="label" style="display:block;width:fit-content" title="Open creator rewards on pump.fun">Creator-fee milk &#8599;</a>`
+        : `<div class="label">Creator-fee milk</div>`}
       <div class="value deep">${esc(sol(s.feesTotalSol))}</div>
       <div class="sub">SOL, collected in ${d.claims.length} bucket${d.claims.length === 1 ? "" : "s"}</div>
     </div>
@@ -598,3 +600,44 @@ fetch("/api/public")
     $("p-status").className = "pill pink";
   })
   .finally(connect);
+
+// ------------------------------------------------------------ analogy popup
+//
+// Deliberately independent of the fetch/render/SSE flow above: it must show
+// even if /api/public is unreachable (the whole point is explaining what the
+// cow does, which matters most when a visitor is confused, offline data
+// included) and must not re-open every time render() runs off a new SSE
+// snapshot. -v1 suffix lets a future copy change re-show it to everyone by
+// bumping the key, no migration needed.
+
+const ANALOGY_KEY = "cc-analogy-dismissed-v1";
+
+function openAnalogy() {
+  const el = $("analogy-backdrop");
+  if (el) el.hidden = false;
+}
+
+function closeAnalogy() {
+  const el = $("analogy-backdrop");
+  if (el) el.hidden = true;
+  try { localStorage.setItem(ANALOGY_KEY, "1"); } catch { /* see below */ }
+}
+
+$("analogy-close")?.addEventListener("click", closeAnalogy);
+$("analogy-backdrop")?.addEventListener("click", (e) => {
+  if (e.target.id === "analogy-backdrop") closeAnalogy(); // backdrop, not the card
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("analogy-backdrop") && !$("analogy-backdrop").hidden) closeAnalogy();
+});
+$("p-analogy")?.addEventListener("click", openAnalogy);
+
+// localStorage throws in some private-browsing / locked-down contexts. This
+// script also drives the live render loop above, so a thrown error here must
+// not take down the rest of the page -- fail open (show once per pageview)
+// rather than crash app.js entirely.
+try {
+  if (!localStorage.getItem(ANALOGY_KEY)) openAnalogy();
+} catch {
+  openAnalogy();
+}

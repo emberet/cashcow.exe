@@ -4,7 +4,7 @@ import { PumpSdk, OnlinePumpSdk, getSellSolAmountFromTokenAmount } from "@pump-f
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import BN from "bn.js";
 import type { Config } from "../config/schema.ts";
-import { getConnection, computeBudgetIxs, lamportsToSol } from "./rpc.ts";
+import { getConnection, computeBudgetIxs, lamportsToSol, withBalanceLock } from "./rpc.ts";
 import { loadWallet } from "./wallet.ts";
 import { log } from "../util/log.ts";
 
@@ -141,10 +141,17 @@ export async function sellAll(cfg: Config, mint: string, slippagePct: number): P
   );
   tx.sign([wallet]);
 
-  const before = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
-  const signature = await conn.sendTransaction(tx, { skipPreflight: false, maxRetries: 3 });
-  await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, cfg.rpc.commitment);
-  const after = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
+  // See chain/rpc.ts withBalanceLock: this window must not overlap a launch's
+  // or a fee claim's own before/after snapshots, run from the independent
+  // launch loop and admin command queue, or their balance change gets folded
+  // into this sell's measured proceeds.
+  const { before, signature, after } = await withBalanceLock(async () => {
+    const b = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
+    const sig = await conn.sendTransaction(tx, { skipPreflight: false, maxRetries: 3 });
+    await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, cfg.rpc.commitment);
+    const a = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
+    return { before: b, signature: sig, after: a };
+  });
 
   // Measured, not estimated: this figure feeds the P&L ledger, and the ledger
   // is reconciled against the real wallet balance during live verification.

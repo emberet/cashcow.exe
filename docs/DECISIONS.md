@@ -520,3 +520,448 @@ only the legitimate `scoring.threshold` was accepted.**
 
 This is the payoff for §9: the mandate is an allowlist in code, not an
 instruction in a prompt. A prompt would have been argued with.
+
+---
+
+## 24. The admin password lives in the database, with `.env` as the bootstrap
+
+**Context.** The portal had exactly one password field — the login box. Rotating
+the password meant running the CLI, copying a hash, and hand-editing `.env`.
+Asked for a reset panel, the honest answer was that an *unauthenticated* one
+hands the portal to anyone who can reach `/admin`. What was built is the version
+that belongs in a portal: change password, current password required, behind an
+existing session and CSRF token.
+
+**The actual design problem was storage, not UI.** `authState`, `login` and
+`validateSession` all read `process.env.ADMIN_PASSWORD_HASH` at call time. A
+browser cannot durably change an environment variable, and rewriting the
+operator's `.env` from a request handler is invasive and easy to corrupt.
+
+**Decision.** Store the rotated hash in the existing `kv` table;
+`ADMIN_PASSWORD_HASH` is the bootstrap credential and `kv` wins when present. No
+migration — `kv` has existed since v1. A scrypt hash there is no worse than the
+session-token hashes already stored alongside it, and because every reader hits
+the store on each call, a rotation takes effect with no restart.
+
+**The sharp edge, and the mitigation.** Once an override exists, editing `.env`
+silently does nothing — an excellent way to lock yourself out while believing
+you fixed it. So: `admin-password --save` writes straight to `kv`,
+`--clear` drops the override, `authState` names the source it is complaining
+about, and the CLI refuses to print a hash line that a live override would make
+a no-op without saying so.
+
+**Rotation revokes every session, including the caller's.** "Someone else has a
+session I did not authorise" is a primary reason to change a password; a
+rotation that left other sessions alive would miss the point.
+
+**Two smaller things fixed on the way.** The change endpoint gets its own
+throttle bucket, separate from login — the session is what authorises the call,
+but `verifyPassword` at N=2¹⁷ is ~200ms of CPU, so an authenticated client could
+otherwise pin a core by hammering it. And the CLI prompt now refuses a
+non-TTY stdin: on EOF the prompt never resolved and the process exited 0 having
+done nothing, which under `--save` was indistinguishable from success.
+
+---
+
+## 25. What pump.fun actually accepts for a listing, with sources
+
+pump.fun is not a documented API, so every claim here carries a link. Checked
+2026-08-26. Re-verify before trusting it — they change without notice.
+
+| Thing | Value | Source | Confidence |
+|---|---|---|---|
+| Coin image min resolution | **1000×1000px**, 1:1 square, ≤15MB, `.jpg/.gif/.png` | [pump.fun help — create a coin](https://intercom.help/pumpfun-web/en/articles/11002205-create-a-coin-on-pump-fun) | verified, primary |
+| Banner | 1500×500 (3:1), ≤5MB, gifs allowed, **"only settable during coin creation. Cannot be changed later."** | same | verified, primary |
+| Metadata after creation | Immutable — "the contract is renounced upon creation which makes the Metadata Immutable" | same | verified, primary |
+| Metadata JSON fields | `name`, `symbol`, `description`, `image`, `showName`, `createdOn`, optional `twitter`/`telegram`/`website` | [Moralis](https://docs.moralis.com/web3-data-api/solana/tutorials/get-pump-fun-token-metadata), [PumpPortal](https://pumpportal.fun/creation/) | corroborated, third-party |
+| A `banner` field in that JSON | **No evidence one exists** | absent from every source searched, and from `@pump-fun/pump-sdk` 1.36.0 | unverified, leaning no |
+| `pump.fun/api/ipfs` upload | **Dead.** Bring your own pinner | [pumpdotfun-sdk#70](https://github.com/rckprtr/pumpdotfun-sdk/issues/70), [PumpPortal](https://pumpportal.fun/creation/) | corroborated |
+| Symbol max | 10 chars (we use 3–8, `[A-Z0-9]`) | [Moralis](https://docs.moralis.com/web3-data-api/solana/tutorials/get-pump-fun-token-metadata) | corroborated |
+| Description max | **Not published by pump.fun.** Ours is a choice | — | our decision, not theirs |
+
+**Two defects this found.**
+
+The image was rendered at **512×512 — below pump.fun's own 1000×1000 floor.**
+Raised. This is free: the image is referenced by IPFS URL, not embedded, so it
+costs pin size and never the ~17 bytes of packet headroom §18 leaves us.
+
+The description had **two disagreeing limits** — the model prompt asked for ≤120
+characters while both code paths truncated at 200. A compliant model wrote 120;
+a chatty one got cut mid-word. One config key now feeds the prompt and both
+truncations.
+
+**Why there is still no banner support.** A banner cannot be added after
+creation, so if it is settable at all it is at mint time — and nothing in the
+SDK's create instruction (`name`/`symbol`/`uri` only) nor any documented
+metadata field carries one. Building a renderer against a guessed field name
+would spend render time and pin cost on something silently discarded. Left
+unbuilt and documented instead. If the field is ever confirmed, the banner
+render is a near-copy of the logo path.
+
+**Still unproven: the upload path has never run.** `src/assets/ipfs.ts` returns
+`https://example.invalid/...` whenever `PINATA_JWT` is unset off-mainnet, which
+is exactly what both devnet launches used. Mainnet refuses to launch without the
+key, so this fails safe — but it means the real Pinata pin, and therefore
+everything in the table above, is untested in this codebase. The first mainnet
+launch would be its first real exercise.
+
+## 26. Deduping our own trends over 24h, separately from market crowding
+
+Raising throughput from 3 launches/day to 45 changed what the saturation check
+had to survive. At 3/day the odds of two candidates in one day being the same
+topic were low. At 45/day, with ten feeds all reacting to the same news cycle,
+it is the expected case — "Crypto Market", "crypto markets" and "Crypto Market
+Crash" are one story arriving three times.
+
+**The gate was open, and measurably so.** Seeded with the live DB row for
+`Crypto Market` (launched two hours earlier) and run through the real
+`checkSaturation`:
+
+| candidate | similarity | verdict before |
+|---|---|---|
+| `Crypto Market Crash` | 0.90 | launched |
+| `CryptoMarket` | 0.85 | launched |
+| `crypto markets` | 0.78 | launched |
+| `crypto market rally today` | 0.90 | launched |
+
+Two mechanisms existed and neither closed it:
+
+- **`maxSimilar: 2`** is a *tally*, and self-launches and market tokens land in
+  the same one. Our own two-hour-old token supplied only 1 of the 2 hits needed,
+  so the near-duplicate went out. Lowering it to 1 is not the fix — it would
+  mean a single unrelated token anywhere on pump.fun blocks every launch.
+- **`neverRelaunchSameTerm`** is an *exact* normalised-key match. One extra word
+  and it does not fire.
+
+The two questions are genuinely different and were being answered by one knob.
+*"Is this trend crowded?"* is a count, where one other token is normal.
+*"Did we already mint this?"* is a boolean, where one is already one too many.
+
+**Decision: a separate self-dedupe gate.** `findSelfDuplicate()` rejects on a
+single hit among our own launches in a rolling `selfDedupeHours` (default 24)
+window, with its own `selfDedupeSimilarity` floor. Market crowding keeps its
+count-based logic untouched.
+
+It runs **before** the market HTTP call, per the standing rule that free
+rejections come first — repeating ourselves is now diagnosed with zero network.
+
+**Two things it compares that the old path could not.** The model renames
+trends, so the term and the minted name diverge: "Fed Rate Decision" can mint as
+"MoneyPrinter". Checking only the term would miss the next candidate that is
+plainly the same coin; checking only the name would miss the same topic renamed
+differently. Both are compared, and the reason string names which one matched.
+
+**A second checkpoint after naming.** The upstream gate sees only the term, and
+has no symbol at all — the ticker does not exist until the model has run. So the
+check runs again on the generated identity, next to the existing filter
+re-check, and before the image render and IPFS pin. This is what catches two
+dissimilar terms that both mint as near-identical names or an identical ticker.
+It throws `DuplicateIdentityError`, handled as a decline rather than a failure
+so it does not count toward the consecutive-error breaker.
+
+**Not added to the tuner allowlist.** Both keys are pickiness, not money, so
+Invariant 3 would permit it — but the 24h window was an explicit operator
+instruction and the tuner should not quietly erode it. Default-deny means no
+change was needed to keep it out.
+
+**Known limitation:** the window counts dry-run and simulated launches too, the
+same as `everLaunched` and `selfLaunched` before it. A long dry-run session
+therefore suppresses real launches of those topics for 24h. That errs toward
+fewer launches, which is the safe direction, so it is left as is.
+
+## 27. Serving the dashboard from a domain, and keeping it up
+
+The public dashboard ran on a Cloudflare **quick tunnel** — anonymous, random
+hostname, dead the moment the process stopped or the Mac slept, and back as a
+*different* random URL. Unshareable and unbookmarkable by construction.
+
+**Named tunnel over the alternatives.** Port-forwarding plus Caddy would expose
+the home IP, need router access, and break on every ISP address change. A VPS
+adds cost and a second machine to maintain. The tunnel makes only *outbound*
+connections, hides the origin IP, and terminates TLS at Cloudflare's edge.
+
+**Buying at Cloudflare Registrar was load-bearing, not incidental.** The domain
+lands in the account with Cloudflare nameservers already authoritative, so
+`tunnel route dns` works immediately. Registering elsewhere adds a nameserver
+repoint and hours of propagation before the CNAME target — which only resolves
+inside a Cloudflare zone — can be created at all.
+
+**The tunnel points at 4601 and must never point at 4600.** Two web processes
+run: 4600 is the bot's own dashboard with `adminEnabled: true`, and 4601 is a
+separate instance under `public.config.json` with admin off. Aiming the tunnel
+at 4600 would publish the admin portal to the internet. The distinction is
+verified by asserting `/admin`, `/api/admin/snapshot` and `/api/login` all
+return **404** on the public hostname — proving the surface is *absent*, not
+merely password-guarded. A catch-all `http_status:404` rule means any other
+hostname arriving on the tunnel gets nothing.
+
+No code changed. Every client path is already relative (including the SSE
+`EventSource("/api/stream")`), the server reads `Host` only to parse the
+pathname, and the CSP is origin-agnostic (`default-src 'self'`). Both servers
+still bind loopback only, so the tunnel is the sole ingress.
+
+**LaunchAgents, not a LaunchDaemon.** The bot must run as the user — it needs
+the repo, `.env`, and the keypair — and a tunnel starting at *boot* while the
+bot starts at *login* would serve 502s in the gap. Starting them together at
+login is the coherent pairing, and avoids running a money-spending process as
+root. `WorkingDirectory` must be the repo: that is what makes `src/cli.ts` find
+`.env`, and therefore what makes the admin password and API keys load at all.
+
+**`cloudflared service install` generates a broken plist.** It writes
+`ProgramArguments` containing only the binary path with no subcommand, so
+cloudflared prints its usage text and exits on every launch attempt — while
+still reporting "installed successfully". The domain returned 530 with the
+agent showing status 1 and no process. It needs the explicit `tunnel run
+<name>` and an absolute `--config`, because launchd neither expands `~` nor
+runs a login shell and will not otherwise find `~/.cloudflared`. `KeepAlive`
+was also changed from exit-code-conditional to unconditional.
+
+**Known exposure:** this is a laptop. `pmset -c sleep 0` only covers AC power,
+and closing the lid sleeps the machine regardless, which drops the tunnel.
+
+## 28. The safety gates read `network`; the money follows `rpc.primary`
+
+Found by inspection, not by loss, and only because the wallet happened to be
+empty on the other chain.
+
+`config.json` had `rpc.primary` pointing at `mainnet.helius-rpc.com` while
+`network` still said `devnet`, with `dryRun: false` and `launch.simulate:
+false`. Those two fields are read by different things:
+
+- Every mainnet-specific interlock keys on `cfg.network`. Invariant 8 — live
+  mainnet requires `ANTHROPIC_API_KEY` for the brand/likeness screen — checks
+  `network === "mainnet-beta"` and stands down otherwise.
+- Transactions are built and sent against whatever `cfg.rpc.primary` resolves
+  to.
+
+So a config claiming devnet was signing against real mainnet with every
+mainnet guard disarmed. Nothing was lost for exactly one reason: a Solana
+keypair is the same address on both chains, and that address held 0 SOL on
+mainnet, so transactions failed on insufficient funds. Funding the wallet —
+which was already on the task list — would have removed the only thing standing
+in the way.
+
+**The mismatch is silent by design elsewhere in the file.** `redactedConfig()`
+drops the RPC endpoint entirely (Invariant 12: API keys live in those URLs), so
+the dashboard cannot show the disagreement, and the startup banner logs
+`network` without the endpoint. Nothing surfaces the pair together.
+
+Fixed by repointing to `devnet.helius-rpc.com` — Helius uses one API key across
+both networks and differs only by hostname, so the credential was preserved.
+
+**The general lesson:** `network` is a *label*; `rpc.primary` is the *fact*. Any
+future guard that means "are we spending real money?" should derive that from
+the endpoint, or the two should be validated against each other in
+`assertCoherent()`. Until that exists, treat changing `rpc.primary` as
+equivalent to changing `network`, and re-run `preflight` after either.
+
+## 29. Resetting throughput off the devnet numbers
+
+The caps were sized for devnet, where SOL is free and refillable: 45
+launches/day x 0.2 SOL = 9 SOL/day, with `maxSolPerDay: 9` chosen to be exactly
+that product. On mainnet that is ~10 SOL/day of real money, and section 1 has
+the arithmetic on why a high launch rate loses: per-launch costs are fixed and
+certain, the payoff is heavy-tailed and rare.
+
+Reset to **9 launches/day at an unchanged 0.2 SOL dev buy** — 1.8 SOL/day of
+buys, ~2.03 SOL/day including the ~0.025 create cost.
+`maxConcurrentPositions` came down from 45 to match, having been dead slack.
+
+**`maxSolPerDay` was then cut from 9 to 2.5, and this is the point of the
+change.** Left at 9 it would no longer bind: the launch path implies 2.03, so a
+bug in exits, fee claims or retries could spend 4x what the launch cap suggests
+with nothing watching. `assertCoherent()` permits it (1.8 < 9) because it only
+rejects a launch cap the SOL budget *cannot fund* — it has no opinion on a
+ceiling that is merely far too loose. A backstop that cannot be reached is not a
+backstop.
+
+Lowering it immediately surfaced a second problem: `assertCoherent()` refused
+the config because `maxDailyLossSol` was still 5, above the new 2.5 ceiling —
+*"the loss circuit-breaker can never trip."* It had been coherent only by
+accident of the old, larger ceiling. Set to 1.5, so the day halts after losing
+60% of the allowance with room for the loss to be realised before the spend
+ceiling trips first and masks it.
+
+## 30. Going live on mainnet, and an empty env var that faked an invalid config
+
+`network` and `rpc.primary` were switched to mainnet **together**, per §28, with
+`launch.simulate: true` so the bot builds and simulates the real create+buy
+against mainnet without sending it. Simulation books to the pretend ledger via
+`isPretend()`, so it cannot consume the real daily allowance. `simulate` goes
+false only once a simulation has passed *and* the wallet holds SOL.
+
+Sizing was already done for a 0.2 SOL balance (§29 follow-on): dev buy 0.05,
+1 launch/day, 0.1 SOL/day ceiling, 0.06 SOL loss breaker. `capacity` confirms
+cost/launch 0.0768 SOL, which clears the 0.05 SOL `reserveSol` floor that is
+held back for exits and never spent on launches.
+
+**`config.json` is in the public dashboard's config chain.** The layering in
+`loadConfig()` is `default.config.json` → `config.json` → `TRENDBOT_CONFIG`, so
+`public.config.json` inherits `network`, `dryRun` and the RPC endpoint rather
+than declaring them. That is what keeps the public page from advertising a
+different chain than the bot signs against, and it is why that file — which is
+tracked in git, unlike `config.json` — must never carry the RPC URL: the API
+key is in it. The header comment there previously claimed it layered only on
+`default.config.json`, which was wrong and would have invited a duplicate,
+drifting copy of `network`.
+
+### The failure worth remembering
+
+Immediately after the switch, every CLI command died with *"Live mainnet run
+without `ANTHROPIC_API_KEY`"* — invariant 8 refusing to start. The key was
+present in `.env`, correctly spelled, 108 bytes of clean ASCII, and the loader
+reads `.env` before the config. The file was not the problem.
+
+`process.loadEnvFile()` **does not overwrite a variable that already exists in
+the environment**, and the interactive shell exported `ANTHROPIC_API_KEY` as an
+*empty string*. The empty value therefore won over the real one from `.env`,
+`Boolean("")` is false, and the gate fired. A present-but-empty variable is
+strictly worse than an absent one here: absent would have loaded correctly.
+
+The bot itself was never affected. Its LaunchAgent environment holds only
+`HOME`, `LOGNAME`, `PATH`, `SHELL`, `SSH_AUTH_SOCK`, `TMPDIR`, `USER` and the
+`XPC_*` pair — no shadow — so `.env` populates cleanly. This was a diagnostic
+artifact of the terminal, not a defect in the config or the deployment, and the
+distinction matters: the obvious "fix" of loosening invariant 8, or setting
+`filters.allowUnscreenedLive`, would have disabled a real brand/likeness
+safeguard to work around a shell quirk.
+
+To reproduce a CLI run the way the bot sees it: `env -u ANTHROPIC_API_KEY node
+src/cli.ts <cmd>`.
+
+## 31. What a hard reboot found: a startup race on the database
+
+The reboot test was passed deliberately rather than assumed. All three
+LaunchAgents came back unattended, both servers rebound to loopback only, the
+tunnel reconnected, and `https://cashcowexe.win` served 200 with `/admin`,
+`/api/admin/snapshot` and `/api/login` all still 404. The database survived the
+unclean shutdown intact: `PRAGMA integrity_check` returned `ok`, the WAL
+replayed, and all 100,273 signals were present.
+
+One thing did not survive cleanly, and it had been happening since the two
+LaunchAgents were installed.
+
+**The bot and the public web server race for `data/bot.db` at startup, and the
+loser used to die** with `database is locked`. At boot both agents start
+together, and one of them lost.
+
+The first fix was wrong, and the way it was wrong is the useful part. It
+attributed the crash to `migrate()` opening a transaction, and set
+`PRAGMA busy_timeout` to make contention wait instead of failing. Both halves
+were mistaken:
+
+- `migrate()` opens no transaction when there is nothing to migrate — the loop
+  body never runs once `user_version` matches. Verified by holding a write lock
+  from a second process and calling `openDb()`: it succeeded in 0ms.
+- The stack had said so all along. It named `db.ts:298`, which was
+  `PRAGMA journal_mode = WAL`, not `migrate()`. The claim was asserted from
+  reading the code rather than from the evidence already in the log.
+
+**`PRAGMA journal_mode` is the one statement `busy_timeout` cannot help.**
+Changing the journal mode requires exclusive access, and SQLite returns
+SQLITE_BUSY *without ever invoking the busy handler*. Measured: with
+`busy_timeout` at 3000ms it still failed in 0ms. So the original fix could not
+have protected the failing line — and it was placed *after* that line anyway,
+where it could not have applied to it even if the pragma had honoured it.
+
+It was invisible for three reasons, which is the interesting part:
+
+- `KeepAlive` restarted the crashed process ~0.4s later and the retry won the
+  lock, so the system self-healed.
+- The only symptom was the public dashboard being unreachable for the
+  `ThrottleInterval` (~10s) after each boot — easy to attribute to "still
+  booting".
+- `launchctl list` showed it plainly as last-exit **1** on `com.cashcow.public`,
+  but a non-zero exit next to a running PID reads as historical noise.
+
+The actual fix has two parts, for the two actual problems:
+
+1. **Read the journal mode before writing it.** Reading is an ordinary read and
+   takes no exclusive lock, and on every boot after the first the answer is
+   already `wal`, so the contended statement is never issued at all. Only a
+   genuine conversion contends, and that path gets a bounded retry
+   (`WAL_RETRIES` x `WAL_RETRY_MS`) because no timeout can cover it.
+2. **Set `busy_timeout`, and set it FIRST.** It does not help journal_mode, but
+   it does cover the migrations and every ordinary write afterwards, which
+   would otherwise also fail instantly under contention. Ordering is
+   load-bearing rather than stylistic: the pragma only affects statements
+   executed after it.
+
+`com.cashcow.public` now reports last exit 0 after a simultaneous restart.
+
+**On the tests.** The first version of this test suite was theatre for the part
+that mattered: it asserted the timeout pragma was set, and separately
+demonstrated the timeout mechanism on a connection it configured itself — so
+that second test passed with or without the fix, and neither test touched
+`journal_mode`, the line that actually crashed.
+
+The replacement reproduces the crash rather than describing it: a real second
+process takes a write lock on a not-yet-WAL database, and `openDb()` must
+still complete. Verified in both directions — it fails against the original
+code (throws in ~26ms) and passes against the fix (waits ~760ms for the holder
+to release, then succeeds). A separate process is required; an in-process
+connection would not reproduce the boot scenario, and node:sqlite's synchronous
+API means a blocking wait in the test process would deadlock against any timer
+meant to release the lock.
+
+**Sleep.** `sudo pmset -c sleep 0` is applied — AC power shows `sleep 0`. Note
+that *battery* still shows `sleep 1`, so unplugging drops the site after a
+minute, and the lid caveat from §27 is unchanged.
+
+---
+
+## 32. Cloudflare cached the stylesheet but not the HTML, so new markup rendered against old CSS
+
+**Symptom, as reported:** "There is a sizing issue and it's missplaced" —
+minutes after the social links shipped to `cashcowexe.win`.
+
+**What was actually happening.** The origin sends `cache-control: no-cache` on
+every static file (`serveStatic`). Cloudflare's default Browser Cache TTL
+overrides that for static extensions and leaves HTML alone, which the response
+headers show plainly:
+
+```
+GET /            -> cache-control: no-cache      cf-cache-status: DYNAMIC
+GET /styles.css  -> cache-control: max-age=14400 cf-cache-status: EXPIRED
+GET /app.js      -> cache-control: max-age=14400
+```
+
+So `index.html` is always fresh and `styles.css` is up to four hours stale, at
+the edge *and* in the visitor's browser. A returning visitor got the new
+`nav.social` markup with a stylesheet that had never heard of `.social`.
+
+**Why that was not merely cosmetic.** An inline `<svg>` with a `viewBox` and no
+intrinsic size resolves to the width of its container. With the icon rule
+missing, each logo expanded to fill the column — measured at **1228x1228px**,
+turning the footer into a page-sized GitHub octocat. That is the "sizing issue"
+and the "misplaced", and it is one defect, not two.
+
+Reproduced deterministically rather than inferred: deleting every rule whose
+`cssText` contains `.social` from the live stylesheet and re-measuring gives
+`svgW: 1228, navH: 2541`.
+
+**Two fixes, because either alone leaves a hole.**
+
+1. **Content-hashed asset URLs.** `serveStatic` rewrites `/styles.css`,
+   `/app.js` and `/admin.js` references in served HTML to `?v=<sha256[:10]>`.
+   A stale copy is then never *requested*, and correctness stops depending on
+   an edge setting that lives outside this repo. A query string rather than a
+   renamed file, because the router keys on `url.pathname` — nothing has to be
+   rewritten on the way back in. Hashes are memoised for the process lifetime;
+   a deploy restarts it.
+2. **`width`/`height` attributes on the inline icons.** The CSS still sets the
+   real size, but the attributes are the floor when the stylesheet is stale or
+   fails to load entirely. This is the part that would have made the bug
+   invisible instead of spectacular.
+
+**On verification.** The first attempt at these links was shipped on structural
+checks alone — HTML nesting, balanced CSS braces, no `display:none` collision —
+because no headless browser was to hand. Every one of those checks passed on a
+page that was visibly broken, because none of them modelled a visitor whose
+cache disagreed with the server. Structural checks cannot see a layout; the
+defect was found by rendering the page and measuring the icons.
+
+**Test.** `test/web-assets.test.ts` asserts the versioning rewrite, that the
+version is derived from real file bytes, that no asset referenced by a page is
+missing from `VERSIONED_ASSETS`, and that both social icons carry explicit
+dimensions. The last one was verified to fail against the pre-fix markup.

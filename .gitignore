@@ -6,6 +6,7 @@ data/*.db
 data/research/
 # Machine-learned state: environment-specific, regenerated, and discardable.
 data/tuning.json
+docs/self-improvement.md
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
@@ -19,3 +20,5 @@ wallet*.json
 keypair*.json
 *keypair*.json
 data/*keypair*.json
+.DS_Store
+data/*.bak*

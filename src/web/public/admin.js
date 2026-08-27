@@ -148,6 +148,32 @@ $("btn-revoke").addEventListener("click", () => {
   post("/api/admin/revoke-sessions", {}).then(() => location.reload()).catch(() => {});
 });
 
+// A successful change revokes every session, so the only thing to do afterwards
+// is reload into the login screen. The fields are cleared either way -- there is
+// no reason for a plaintext password to sit in the DOM after the request.
+$("pw-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("pw-btn");
+  const fields = ["pw-current", "pw-next", "pw-confirm"].map($);
+  btn.disabled = true;
+  btn.textContent = "CHANGING...";
+  try {
+    await post("/api/admin/password", {
+      current: fields[0].value,
+      next: fields[1].value,
+      confirm: fields[2].value,
+    });
+    fields.forEach((f) => { f.value = ""; });
+    msg($("pw-msg"), "Password changed. Signing you out...", "ok");
+    setTimeout(() => location.reload(), 1200);
+  } catch (err) {
+    fields.forEach((f) => { f.value = ""; });
+    msg($("pw-msg"), err.message, "err");
+    btn.disabled = false;
+    btn.textContent = "CHANGE PASSWORD";
+  }
+});
+
 function sellOne(id, symbol) {
   if (!confirm(`Queue a sell of position #${id} (${symbol})?\n\nThis spends SOL and cannot be undone.`)) return;
   action(() => post("/api/admin/command", { kind: "sell_position", payload: { positionId: id } }));

@@ -10,6 +10,36 @@
 </head>
 <body>
 
+<!--
+  Shown once per browser (localStorage, see app.js) and reopenable any time
+  via #p-analogy in the topbar. [hidden] is the toggle, not a class -- this
+  stylesheet already gives [hidden] !important, and a class-based display
+  would silently lose that fight (see CLAUDE.md gotchas).
+
+  Numbers here match src/config/schema.ts's distribution.splits defaults
+  (40 token holders / 50 operator / 10 raffle) but that feature is
+  accounting-only and off (distribution.enabled: false everywhere in this
+  deployment's config chain) -- no token, no recipient list, no payout
+  mechanism exists yet. The copy says so plainly rather than implying a live
+  entitlement, consistent with the disclaimer card lower on this page.
+-->
+<div class="popup-backdrop" id="analogy-backdrop" hidden>
+  <div class="card popup" role="dialog" aria-modal="true" aria-labelledby="analogy-title">
+    <button type="button" class="popup-close" id="analogy-close" aria-label="Close">&times;</button>
+    <h4 id="analogy-title" class="cardtitle">Moo! Here's the deal.</h4>
+    <p>
+      I graze the internet for a trend before anyone else smells it, and once
+      it clears every gate that costs nothing, I mint it into a coin. Whatever
+      milk (creator fees) that coin makes gets split three ways: half stays
+      with me for hay, RPC bills and the late nights that keep the barn
+      running; 40% is penciled in for holders once a real payout pipe exists
+      &mdash; <strong>not live yet</strong>, no token, no claim, nothing to
+      promise; the rest funds a weekly raffle.
+    </p>
+    <p class="note">Silly experiment, not investment advice &mdash; full disclaimer further down this page.</p>
+  </div>
+</div>
+
 <div class="topbar">
   <div class="inner">
     <span class="wordmark">cashcow.exe</span>
@@ -17,6 +47,7 @@
     <span class="pill sky" id="p-network">devnet</span>
     <span class="pill leaf" id="p-status">MUNCHING <span class="blinker"></span></span>
     <span class="pill num" id="p-countdown">next sniff —</span>
+    <button type="button" class="pill" id="p-analogy">the pitch 🐄</button>
   </div>
 </div>
 
@@ -25,9 +56,20 @@
     <div class="hero-grid">
       <div class="hero-copy">
         <div class="bubble" id="hero-bubble">Moo. Warming up my nose…</div>
+        <!--
+          Deliberately does NOT say "before any gate that costs a lamport". That
+          phrasing read as though the checks themselves happen on-chain. They do
+          not: scoring, filters, dedupe and saturation all run locally, and the
+          only things that ever reach Solana are the launch, the dev buy, exits
+          and fee claims. It was also wrong about lamports specifically -- the
+          first paid steps are the naming call and the IPFS pin, which cost API
+          credits, not SOL.
+        -->
         <p>
-          Every gate that can say <em>no</em> for free runs before any gate that costs a
-          single lamport. Below is exactly where today's grass got chewed up and spat out.
+          The cheap checks come first: everything that can say <em>no</em> for free happens
+          right here, before a single step costs anything. Nothing is signed on-chain until a
+          trend has survived all of it. Below is exactly where today's grass got chewed up
+          and spat out.
         </p>
       </div>
       <div class="hero-cow">
@@ -164,6 +206,45 @@
     </p>
     <p class="meta" id="foot-meta"></p>
   </div>
+
+  <!--
+    Hardcoded literals, so invariant 11 (safeHttpUrl) does not apply -- that
+    guards URLs a stranger typed into a feed, not constants in this template.
+    Icons are inline SVG rather than an icon font or CDN: img-src is 'self'
+    data:, and the dashboard is meant to render with no network at all.
+    rel="noopener noreferrer" on both; referrer-policy is already no-referrer.
+
+    The width/height ATTRIBUTES are load-bearing, not decoration. An inline
+    <svg> with a viewBox and no intrinsic size fills its container, so when a
+    visitor held a cached styles.css that predated the .social rules, each icon
+    rendered at 1228px and buried the footer. The CSS still sets the real size;
+    these are the floor if the stylesheet is stale or fails to load.
+  -->
+  <nav class="social" aria-label="Project links">
+    <span class="social-label">Follow the herd</span>
+    <a class="social-link" href="https://github.com/emberet/cashcow.exe"
+       target="_blank" rel="noopener noreferrer">
+      <svg width="17" height="17" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
+          0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01
+          1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95
+          0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27
+          2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82
+          1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01
+          2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+      <span>Source</span>
+    </a>
+    <a class="social-link" href="https://x.com/cashcowEXE"
+       target="_blank" rel="noopener noreferrer">
+      <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99
+          21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084
+          4.126H5.117z"/>
+      </svg>
+      <span>@cashcowEXE</span>
+    </a>
+  </nav>
 </div>
 
 <div class="footer-grass"><div class="tips" id="grass-tips-2"></div></div>

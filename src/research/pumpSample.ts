@@ -11,12 +11,16 @@ import { fetchJson } from "../util/http.ts";
  * old (verified live -- the top 5 by `created_timestamp` were all <1 minute
  * old). Paging backward by time to reach a 30-180-day-old window would need
  * many thousands of requests. `sort=market_cap&order=DESC` instead reaches
- * the $500k-$2M target band within about 10 pages (verified live: offset 500
+ * tokens with real market cap within about 10 pages (verified live: offset 500
  * already sits around $400k), because it goes straight at the population we
- * actually care about -- tokens that reached real market cap -- rather than
- * scanning the sea of tokens that died at inception, which is the vast
- * majority. The age window below is then a filter on that ranked result, not
- * a pagination bound.
+ * actually care about rather than scanning the sea of tokens that died at
+ * inception, which is the vast majority. The age window below is then a filter
+ * on that ranked result, not a pagination bound.
+ *
+ * Note this is only a COARSE prefilter, and it is market-cap-based purely
+ * because that is the only sort key this API offers. The real activity gate is
+ * 24h volume ($500k+) and lives in `classify.ts`, judged on DexScreener data
+ * this endpoint does not carry.
  */
 
 const PUMP_COINS = "https://frontend-api-v3.pump.fun/coins";

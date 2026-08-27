@@ -406,6 +406,83 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   letter-spacing: .05em; text-transform: uppercase; font-variant-numeric: tabular-nums;
 }
 
+/* ----------------------------------------------------------- social links */
+/* NOT named .panel -- that class sets display:none for tab panels and silently
+   hides anything else that borrows the name. */
+.social {
+  margin-top: 18px;
+  display: flex; align-items: center; justify-content: center;
+  flex-wrap: wrap; gap: 12px;
+}
+.social-label {
+  font-family: var(--display);
+  font-size: 15px;
+  color: var(--grey);
+}
+.social-link {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--display); font-size: 15px;
+  padding: 7px 15px;
+  background: var(--milk);
+  color: var(--ink);
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+  text-decoration: none;
+  transition: transform .08s ease, box-shadow .08s ease, background .08s ease;
+}
+/* flex: none so the icon cannot be squeezed by a long label at narrow widths.
+   The matching width/height attributes in the markup are the fallback for a
+   stale stylesheet -- see the comment above nav.social in index.html. */
+.social-link svg { width: 17px; height: 17px; flex: none; fill: currentColor; display: block; }
+.social-link:hover { background: var(--leaf); transform: translate(-2px, -2px); box-shadow: 5px 5px 0 var(--ink); }
+.social-link:active { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--ink); }
+.social-link:focus-visible { outline: 3px solid var(--pink); outline-offset: 2px; }
+
+/* At phone widths the row wraps after "Follow the herd · Source", stranding
+   @cashcowEXE alone on a second line. Giving the label its own full-width row
+   keeps the two pills paired -- they measure 283px together, which clears a
+   375px viewport minus the 15px .wrap padding. */
+@media (max-width: 640px) {
+  .social-label { flex-basis: 100%; text-align: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .social-link { transition: none; }
+  .social-link:hover, .social-link:active { transform: none; }
+}
+
+/* -------------------------------------------------------- analogy popup */
+/* Toggled via the [hidden] attribute (already !important in this stylesheet,
+   see the .panel gotcha in CLAUDE.md) -- never via a display-setting class. */
+.popup-backdrop {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(26, 26, 26, .55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.popup {
+  max-width: 480px;
+  width: 100%;
+  position: relative;
+  background: var(--sky);
+}
+.popup .cardtitle { margin: 0 34px 10px 0; font-size: 21px; }
+.popup p { margin: 0 0 10px; font-weight: 600; font-size: 15.5px; }
+.popup p:last-child { margin-bottom: 0; }
+.popup-close {
+  position: absolute; top: 14px; right: 14px;
+  width: 32px; height: 32px; padding: 0;
+  border-radius: 50%;
+  font-family: var(--display); font-size: 18px; line-height: 1;
+}
+@media (max-width: 640px) {
+  .popup { max-width: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .popup-close { transition: none; }
+}
+
 /* ------------------------------------------------------------- admin shell */
 
 .shell { display: grid; grid-template-columns: 262px 1fr; min-height: 100vh; }

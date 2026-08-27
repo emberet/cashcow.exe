@@ -137,9 +137,9 @@ async function sellOne(
   db: Db, cfg: Config, budget: BudgetGuard, id: number,
 ): Promise<string> {
   const pos = db.prepare(
-    `SELECT id, mint, symbol, entry_sol, status FROM positions WHERE id = ?`,
+    `SELECT id, mint, symbol, entry_sol, status, dry_run FROM positions WHERE id = ?`,
   ).get(id) as
-    | { id: number; mint: string; symbol: string | null; entry_sol: number; status: string }
+    | { id: number; mint: string; symbol: string | null; entry_sol: number; status: string; dry_run: number }
     | undefined;
 
   if (!pos) throw new Error(`position ${id} not found`);
@@ -159,6 +159,9 @@ async function sellOne(
     budget.record({
       kind: "dev_sell", solDelta: sold.solReceived,
       mint: pos.mint, signature: sold.signature, note: "manual sell",
+      // Same reasoning as the autonomous exit path: track the position's own
+      // dry_run, not whatever config this admin command happens to run under.
+      dryRun: !!pos.dry_run,
     });
 
     return `#${id} ${pos.symbol ?? pos.mint.slice(0, 8)} sold for ${sold.solReceived.toFixed(6)} SOL`;

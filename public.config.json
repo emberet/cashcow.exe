@@ -1,0 +1,43 @@
+// Config for the INTERNET-FACING dashboard instance.
+//
+// Used only by `node src/cli.ts web` -- this process serves pages and never
+// runs the bot loop, so it starts no launches and signs nothing.
+//
+// LAYERING: default.config.json -> config.json -> this file (TRENDBOT_CONFIG).
+// config.json IS in the chain, so `network`, `dryRun` and the RPC endpoint are
+// inherited from it and this instance always reports the same chain the bot is
+// really signing against. Do not re-declare them here: a second copy would
+// drift, and the public page would advertise the wrong network. It also means
+// this file must never carry secrets -- it is tracked in git, config.json is
+// not, and the RPC URL has an API key in it.
+//
+// Run it as:
+//   TRENDBOT_CONFIG=public.config.json node src/cli.ts web
+//
+// The bot itself keeps running separately on 4600 with the admin portal
+// available on loopback, where the per-IP login throttle still means something.
+{
+  "web": {
+    // Different port from the bot's own dashboard so both can run at once.
+    "port": 4601,
+
+    // The whole point of this file. Password protection is NOT sufficient for
+    // an internet-facing instance: login throttling keys on the socket address
+    // (invariant 10), and behind a tunnel every request arrives from 127.0.0.1
+    // -- which collapses the per-attacker throttle into one bucket shared by
+    // the entire internet and the operator. With this off, the admin routes
+    // and assets 404 before any auth code runs.
+    "adminEnabled": false,
+
+    // Still loopback: cloudflared connects to it from this machine. Nothing is
+    // bound to 0.0.0.0, so this port is not reachable without the tunnel.
+    "host": "127.0.0.1",
+
+    // Cloudflare terminates TLS in front of us.
+    "behindTlsProxy": true,
+
+    // X-Forwarded-For stays untrusted for anything security-relevant; with the
+    // admin surface gone there is no login to throttle here anyway.
+    "trustProxyHeader": false
+  }
+}

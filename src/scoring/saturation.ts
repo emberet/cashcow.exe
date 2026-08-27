@@ -54,6 +54,93 @@ export function everLaunched(db: Db, term: string): boolean {
 }
 
 /**
+ * Our own launches in the trailing window, carrying the ORIGINAL trend term as
+ * well as the minted name.
+ *
+ * `selfLaunched` collapses those two into one field, which loses information
+ * that matters here: the model renames trends, so "Fed Rate Decision" can mint
+ * as "MoneyPrinter". Comparing only the minted name would miss the next
+ * candidate that is plainly the same topic, and comparing only the term would
+ * miss two different topics that happened to mint under near-identical names.
+ * Both are checked.
+ */
+export function recentSelfLaunches(
+  db: Db,
+  sinceMs: number,
+): Array<{ term: string; name: string; symbol: string; createdAt: number }> {
+  const rows = db.prepare(
+    `SELECT term, name, symbol, created_at FROM launches
+      WHERE created_at > ? ORDER BY created_at DESC`,
+  ).all(sinceMs) as Array<{
+    term: string; name: string; symbol: string; created_at: number;
+  }>;
+  return rows.map((r) => ({
+    term: r.term ?? "", name: r.name ?? "", symbol: r.symbol ?? "",
+    createdAt: r.created_at,
+  }));
+}
+
+/**
+ * Thrown when the *generated identity* duplicates a recent launch, as opposed
+ * to the trend term doing so. A decision, not a failure -- the loop must treat
+ * it as a decline and keep going, not count it toward consecutive errors.
+ */
+export class DuplicateIdentityError extends Error {
+  readonly detail: string;
+  constructor(detail: string) {
+    super(`duplicate of a recent launch: ${detail}`);
+    this.name = "DuplicateIdentityError";
+    this.detail = detail;
+  }
+}
+
+export type SelfDuplicate = {
+  term: string;
+  name: string;
+  symbol: string;
+  createdAt: number;
+  score: number;
+  /** Which field actually matched, so the log says something useful. */
+  matchedOn: "term" | "name" | "symbol";
+};
+
+/**
+ * Did WE launch this topic recently? One hit is disqualifying.
+ *
+ * Free: pure SQL plus string distance, no network. Runs before the market
+ * lookup so a repeat of our own trend never costs an HTTP call.
+ */
+export function findSelfDuplicate(
+  db: Db,
+  term: string,
+  candidateSymbol: string | undefined,
+  cfg: SaturationConfig,
+  now = Date.now(),
+): SelfDuplicate | undefined {
+  if (cfg.selfDedupeHours <= 0) return undefined;
+
+  const since = now - cfg.selfDedupeHours * 3600_000;
+  const candSym = candidateSymbol ? normalize(candidateSymbol) : "";
+
+  let best: SelfDuplicate | undefined;
+  for (const row of recentSelfLaunches(db, since)) {
+    const byTerm = row.term ? similarity(term, row.term) : 0;
+    const byName = row.name ? similarity(term, row.name) : 0;
+    // An identical ticker is a collision even when the topics read differently.
+    const bySymbol = candSym && row.symbol
+      ? similarity(candSym, normalize(row.symbol))
+      : 0;
+
+    const score = Math.max(byTerm, byName, bySymbol);
+    if (score < cfg.selfDedupeSimilarity) continue;
+
+    const matchedOn = score === byTerm ? "term" : score === byName ? "name" : "symbol";
+    if (!best || score > best.score) best = { ...row, score, matchedOn };
+  }
+  return best;
+}
+
+/**
  * Pure core: given a candidate and the tokens already in the world, decide
  * whether the trend is too crowded to be worth launching into.
  */
@@ -106,6 +193,20 @@ export async function checkSaturation(
     return {
       saturated: true,
       reason: `we have already launched "${term}" before; neverRelaunchSameTerm is on`,
+      matches: [],
+    };
+  }
+
+  // Free, and about us rather than the market, so it runs before the HTTP call.
+  const dupe = findSelfDuplicate(db, term, candidateSymbol, cfg);
+  if (dupe) {
+    const agoH = ((Date.now() - dupe.createdAt) / 3600_000).toFixed(1);
+    return {
+      saturated: true,
+      reason:
+        `we launched ${dupe.symbol || dupe.name || dupe.term} ${agoH}h ago and it is the ` +
+        `same ${dupe.matchedOn} (similarity ${dupe.score.toFixed(2)} >= ` +
+        `${cfg.selfDedupeSimilarity}, window ${cfg.selfDedupeHours}h)`,
       matches: [],
     };
   }

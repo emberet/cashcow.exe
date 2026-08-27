@@ -38,19 +38,49 @@ export type Candidate = {
 };
 
 /** Persist observations, expanding long text into comparable key phrases. */
-export function ingestSignals(db: Db, signals: RawSignal[], feedWeights: Map<string, number>): number {
+export function ingestSignals(
+  db: Db,
+  signals: RawSignal[],
+  feedWeights: Map<string, number>,
+  cfg: ScoringConfig,
+): number {
   const stmt = db.prepare(
     `INSERT INTO signals (feed, term, norm, raw_score, observed_at, ingested_at, url, meta, source_text)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  // A feed re-serving byte-identical content (a static or stickied 4chan
+  // thread, polled every 120s) is not a new observation -- only its reply
+  // count changed, and that is not reflected in the text. Without this check
+  // the same stale content re-enters `signals` every poll, inflating both
+  // `observations` (a plain row count) and `velocityOf`'s recent-half sum for
+  // a term that has not actually changed, which is what made stale terms keep
+  // re-qualifying as candidates tick after tick. This is checked BEFORE
+  // extraction, not after: extractPhrases() is a pure function of the text,
+  // so identical source_text always yields identical phrases -- deduping the
+  // raw signal is equivalent to deduping every phrase it would have produced,
+  // and skips the extraction work entirely.
+  //
+  // Deliberately does not touch neverRelaunchSameTerm, self-dedupe, or
+  // saturation -- those gates keep seeing every genuinely distinct signal
+  // exactly as before. This is an ingestion-time fix only.
+  const dupeCheck = db.prepare(
+    `SELECT 1 FROM signals WHERE feed = ? AND source_text = ? AND ingested_at > ? LIMIT 1`,
+  );
   // One clock for the whole batch, so a slow insert loop cannot smear a single
   // poll across a window boundary.
   const now = Date.now();
+  const windowStart = now - cfg.maxSignalAgeMinutes * 60_000;
 
   let inserted = 0;
   db.exec("BEGIN");
   try {
     for (const s of signals) {
+      const sourceText = s.term.slice(0, 300);
+      // Reads its own in-flight inserts within this transaction (SQLite
+      // read-your-own-writes), so byte-identical signals within the SAME
+      // batch also collapse to one row, not just across polls.
+      if (dupeCheck.get(s.feed, sourceText, windowStart)) continue;
+
       const weight = feedWeights.get(s.feed) ?? 1;
       for (const phrase of extractPhrases(s.term)) {
         stmt.run(
@@ -64,7 +94,7 @@ export function ingestSignals(db: Db, signals: RawSignal[], feedWeights: Map<str
           safeHttpUrl(s.url),
           s.meta ? JSON.stringify(s.meta) : null,
           // The source's own words, for display. `term` is the extracted phrase.
-          s.term.slice(0, 300),
+          sourceText,
         );
         inserted++;
       }

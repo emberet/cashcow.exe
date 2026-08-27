@@ -3,6 +3,8 @@ import { isAbsolute, resolve } from "node:path";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import type { Config } from "../config/schema.ts";
+import type { Db } from "../util/db.ts";
+import { kvGet, kvSet } from "../util/db.ts";
 import { PROJECT_ROOT } from "../config/load.ts";
 import { log } from "../util/log.ts";
 
@@ -87,9 +89,49 @@ export function loadWallet(cfg: Config): Keypair {
   return cached;
 }
 
-/** Public key without requiring the secret, when only the address is needed. */
+/**
+ * Public key of the loaded wallet.
+ *
+ * NOTE: despite only returning an address, this DOES require the secret and
+ * leaves the whole keypair in this module's cache -- deriving a public key
+ * from a private key is not a way to avoid holding the private key. Callers
+ * that only need the address and must not hold the secret (i.e. the web
+ * process, invariant 4) want `publishedWalletAddress` instead.
+ */
 export function walletPubkey(cfg: Config): string {
   return loadWallet(cfg).publicKey.toBase58();
+}
+
+/** kv key under which the bot process publishes its address for readers. */
+const WALLET_ADDRESS_KEY = "wallet_address";
+
+/**
+ * Publish the wallet address so processes that must not hold the key can still
+ * display it. Called by the bot, which legitimately holds the secret already.
+ *
+ * Records nothing when no real wallet is configured, so a dry run's ephemeral
+ * throwaway keypair never gets published as though it were real.
+ */
+export function publishWalletAddress(db: Db, cfg: Config): void {
+  const address = configuredWalletAddress(cfg);
+  if (address) kvSet(db, WALLET_ADDRESS_KEY, address);
+}
+
+/**
+ * The wallet address as last published by the bot process -- read from the
+ * database, never derived from the secret.
+ *
+ * This exists because of invariant 4: the web process must never hold the
+ * wallet key. `configuredWalletAddress` looks harmless but calls `loadWallet`,
+ * which parses the secret and caches the full keypair in whatever process
+ * asked for it. That put a signing key inside the request-serving process for
+ * the sake of printing an address that is public information anyway.
+ *
+ * Returns null until the bot has run at least once with a real wallet. Callers
+ * must render that as "unknown" and must NOT fall back to loading the key.
+ */
+export function publishedWalletAddress(db: Db): string | null {
+  return kvGet(db, WALLET_ADDRESS_KEY) ?? null;
 }
 
 /**

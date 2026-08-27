@@ -5,6 +5,7 @@ import { configSchema } from "../src/config/schema.ts";
 import { openMemoryDb, type Db } from "../src/util/db.ts";
 import { decideExit } from "../src/positions/manager.ts";
 import { openPosition, listOpen, closePosition, recordSellFailure, listStuck } from "../src/positions/store.ts";
+import { BudgetGuard } from "../src/risk/budget.ts";
 import { ingestSignals, buildCandidates, qualifying, checkWarmup } from "../src/scoring/score.ts";
 import { extractPhrases } from "../src/scoring/phrases.ts";
 import { cryptoAffinity, tickerability } from "../src/scoring/affinity.ts";
@@ -111,6 +112,56 @@ describe("position store", () => {
   });
 });
 
+// ---------------------------------------------------- ledger dry_run tagging
+
+describe("dev_sell ledger row tracks the position's own dry_run", () => {
+  let db: Db;
+  beforeEach(() => { db = openMemoryDb(); });
+
+  // Regression: a real position opened while `BudgetGuard` was in live mode
+  // could later be closed by a process whose config had drifted into pretend
+  // mode (dryRun or launch.simulate flipped on, e.g. after a restart). The
+  // guard used to tag every record() with its OWN construction-time mode
+  // instead of the position's, so a genuine mainnet sell got booked into the
+  // simulated ledger and vanished from real P&L / budget accounting. See
+  // spend_ledger id=13 in data/bot.db: a real (dry_run=0) BAKD position closed
+  // with a dev_sell row wrongly stamped dry_run=1.
+  test("a real position's exit is recorded as real, even under a pretend BudgetGuard", () => {
+    const id = openPosition(db, {
+      mint: "MintReal", symbol: "RRR", entrySol: 0.1, entryTokens: "1000", dryRun: false,
+    });
+    closePosition(db, id, {
+      reason: "take_profit", exitSol: 0.2431, exitTokens: "1000", entrySol: 0.1,
+    });
+    const pos = db.prepare(`SELECT dry_run FROM positions WHERE id = ?`).get(id) as { dry_run: number };
+    assert.equal(pos.dry_run, 0, "the position itself must still read as real");
+
+    // Construct the guard under a config that is currently in pretend mode --
+    // simulating a restart between this position's open and its close.
+    const pretendCfg = configSchema.parse({ dryRun: true });
+    const budget = new BudgetGuard(db, pretendCfg);
+
+    budget.record({
+      kind: "dev_sell", solDelta: 0.2431, mint: "MintReal",
+      note: "take_profit", dryRun: !!pos.dry_run,
+    });
+
+    const ledger = db.prepare(
+      `SELECT dry_run FROM spend_ledger WHERE mint = 'MintReal' AND kind = 'dev_sell'`,
+    ).get() as { dry_run: number };
+    assert.equal(ledger.dry_run, 0, "the sell must land in the REAL ledger, matching the position");
+  });
+
+  test("record() still defaults to the guard's own mode when dryRun is omitted", () => {
+    const liveCfg = configSchema.parse({ dryRun: false });
+    const budget = new BudgetGuard(db, liveCfg);
+    budget.record({ kind: "launch", solDelta: -0.02, mint: "MintX" });
+
+    const row = db.prepare(`SELECT dry_run FROM spend_ledger WHERE mint = 'MintX'`).get() as { dry_run: number };
+    assert.equal(row.dry_run, 0);
+  });
+});
+
 // ------------------------------------------------------------ warmup gate
 
 describe("warmup — stops a cold start launching on noise", () => {
@@ -134,7 +185,7 @@ describe("warmup — stops a cold start launching on noise", () => {
 
   test("a single burst of signals is not warm", () => {
     // Everything observed at once: velocity has no earlier half to compare to.
-    ingestSignals(db, [sig("googleTrends", "moo deng", 0), sig("reddit", "moo deng", 0)], weights);
+    ingestSignals(db, [sig("googleTrends", "moo deng", 0), sig("reddit", "moo deng", 0)], weights, scoring);
     assert.equal(checkWarmup(db, scoring).warm, false);
   });
 
@@ -149,7 +200,7 @@ describe("warmup — stops a cold start launching on noise", () => {
       rawScore: 0.9,
       observedAt: new Date(Date.now() - 500 * 24 * 3600_000), // ~16 months old
     };
-    ingestSignals(db, [ancient, { ...ancient, feed: "reddit" }], weights);
+    ingestSignals(db, [ancient, { ...ancient, feed: "reddit" }], weights, scoring);
 
     const w = checkWarmup(db, scoring);
     assert.equal(w.warm, false, "an old source timestamp must not satisfy warmup");
@@ -163,7 +214,7 @@ describe("warmup — stops a cold start launching on noise", () => {
       feed, term: "quantum ferret", rawScore: 0.9,
       observedAt: new Date(Date.now() - 400 * 24 * 3600_000),
     });
-    ingestSignals(db, [old("fourchan"), old("reddit"), old("googleTrends")], weights);
+    ingestSignals(db, [old("fourchan"), old("reddit"), old("googleTrends")], weights, scoring);
 
     const c = buildCandidates(db, scoring).find((x) => x.term.includes("quantum"));
     assert.ok(c, "candidate should exist");
@@ -177,7 +228,7 @@ describe("warmup — stops a cold start launching on noise", () => {
     // Warmup now measures how long WE have been collecting, so it can only be
     // satisfied by backdating ingestion -- backdating the source timestamp is
     // exactly the thing the regression above forbids.
-    ingestSignals(db, [sig("googleTrends", "moo deng", 0), sig("reddit", "moo deng", 0)], weights);
+    ingestSignals(db, [sig("googleTrends", "moo deng", 0), sig("reddit", "moo deng", 0)], weights, scoring);
     db.prepare(`UPDATE signals SET ingested_at = ? WHERE feed = 'googleTrends'`)
       .run(Date.now() - 45 * 60_000);
 
@@ -190,7 +241,7 @@ describe("warmup — stops a cold start launching on noise", () => {
     ingestSignals(db, [
       sig("googleTrends", "moo deng", 45),
       sig("reddit", "moo deng", 20),
-    ], weights);
+    ], weights, scoring);
     const candidates = buildCandidates(db, scoring);
     const single = candidates.find((c) => c.observations < scoring.minObservations);
     if (single) {
@@ -206,7 +257,7 @@ describe("warmup — stops a cold start launching on noise", () => {
       sig("fourchan", "quantum ferret", 60),
       sig("fourchan", "quantum ferret", 30),
       sig("fourchan", "quantum ferret", 0),
-    ], weights);
+    ], weights, scoring);
     const found = buildCandidates(db, scoring).find((c) => c.term.includes("quantum"));
     assert.ok(found, "single-source terms are candidates now");
     assert.equal(found.components.corroboration, 0,
@@ -219,7 +270,7 @@ describe("warmup — stops a cold start launching on noise", () => {
     ingestSignals(db, [
       sig("fourchan", "quantum ferret", 60),
       sig("onchain", "quantum ferret", 30),
-    ], weights);
+    ], weights, scoring);
     const c = buildCandidates(db, scoring).find((x) => x.term.includes("quantum"));
     assert.ok(c);
     assert.ok(c.components.corroboration <= 0.05,
@@ -230,11 +281,68 @@ describe("warmup — stops a cold start launching on noise", () => {
     ingestSignals(db, [
       sig("fourchan", "quantum ferret", 60),
       sig("googleTrends", "quantum ferret", 30),
-    ], weights);
+    ], weights, scoring);
     const c = buildCandidates(db, scoring).find((x) => x.term.includes("quantum"));
     assert.ok(c);
     assert.ok(c.components.corroboration >= 0.5,
       `cross-family agreement must score well, got ${c.components.corroboration}`);
+  });
+});
+
+// ------------------------------------------- signal ingestion dedupe
+
+describe("ingestSignals — stale re-polled content does not fake fresh activity", () => {
+  let db: Db;
+  const scoring = configSchema.parse({}).scoring;
+
+  beforeEach(() => { db = openMemoryDb(); });
+
+  const weights = new Map([["googleTrends", 1], ["reddit", 1], ["fourchan", 1], ["onchain", 1]]);
+
+  const raw = (feed: string, term: string): RawSignal => ({
+    feed, term, rawScore: 0.9, observedAt: new Date(),
+  });
+
+  test("byte-identical content re-polled from the same feed collapses to one observation", () => {
+    // Regression: a static/stickied 4chan thread has identical subject/body
+    // text across every 120s poll -- only its reply count changes, which is
+    // folded into raw_score, not the text. Before this dedupe check, each
+    // poll added a fresh row, so `observations` and `velocityOf`'s recent-half
+    // sum grew purely from re-polling, letting a stale term keep re-qualifying
+    // as a candidate tick after tick.
+    ingestSignals(db, [raw("fourchan", "eternal sticky thread")], weights, scoring);
+    ingestSignals(db, [raw("fourchan", "eternal sticky thread")], weights, scoring);
+    ingestSignals(db, [raw("fourchan", "eternal sticky thread")], weights, scoring);
+
+    const c = buildCandidates(db, scoring).find((x) => x.term.includes("eternal"));
+    assert.ok(c, "candidate should exist");
+    assert.equal(c.observations, 1,
+      `repeated identical content must collapse to one observation, got ${c.observations}`);
+  });
+
+  test("genuinely distinct content from the same feed still counts separately", () => {
+    ingestSignals(db, [raw("fourchan", "quantum ferret alpha")], weights, scoring);
+    ingestSignals(db, [raw("fourchan", "quantum ferret beta")], weights, scoring);
+
+    const alpha = buildCandidates(db, scoring).find((x) => x.term.includes("alpha"));
+    const beta = buildCandidates(db, scoring).find((x) => x.term.includes("beta"));
+    assert.ok(alpha, "alpha candidate should exist");
+    assert.ok(beta, "beta candidate should exist");
+    assert.equal(alpha.observations, 1);
+    assert.equal(beta.observations, 1);
+  });
+
+  test("identical text from a DIFFERENT feed still counts as a separate observation", () => {
+    // Dedupe keys on (feed, source_text), not source_text alone -- two
+    // different feeds independently reporting the same term is exactly the
+    // cross-feed corroboration the scorer is designed to reward.
+    ingestSignals(db, [raw("fourchan", "quantum ferret")], weights, scoring);
+    ingestSignals(db, [raw("googleTrends", "quantum ferret")], weights, scoring);
+
+    const c = buildCandidates(db, scoring).find((x) => x.term.includes("quantum"));
+    assert.ok(c);
+    assert.equal(c.observations, 2,
+      "the same text from two different feeds must both count");
   });
 });
 

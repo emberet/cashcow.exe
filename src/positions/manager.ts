@@ -88,6 +88,9 @@ export async function evaluateOpenPositions(
         mint: pos.mint,
         signature: sold.signature,
         note: decision.reason,
+        // The position's own dry_run, not the guard's mode -- an exit can
+        // settle in a later process run than the open, under different config.
+        dryRun: !!pos.dry_run,
       });
 
       result.closed++;

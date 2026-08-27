@@ -11,6 +11,7 @@ import { publicSnapshot, adminSnapshot, refreshWallet } from "./queries.ts";
 import {
   authState, login, logout, validateSession, readCookie, cookieHeader,
   clearCookieHeader, csrfToken, checkCsrf, auditAction, sessionCount, revokeAllSessions,
+  changePassword,
 } from "./auth.ts";
 import { enqueue, COMMAND_KINDS, type CommandKind } from "./commands.ts";
 import { log, errFields } from "../util/log.ts";
@@ -64,7 +65,7 @@ export function startWebServer(db: Db, cfg: Config, kill: KillSwitch): Promise<W
     if (!clients.size) return;
     // Fire and forget: keeps the cached balance warm without making the push
     // loop async. Its own TTL stops this hammering the RPC.
-    void refreshWallet(cfg).catch(() => {});
+    void refreshWallet(db, cfg).catch(() => {});
     try {
       const pub = JSON.stringify(publicSnapshot(db, cfg, kill));
       const pubHash = hash(pub);
@@ -100,7 +101,7 @@ export function startWebServer(db: Db, cfg: Config, kill: KillSwitch): Promise<W
     server.once("error", reject);
     server.listen(cfg.web.port, cfg.web.host, () => {
       const url = `http://${cfg.web.host}:${cfg.web.port}`;
-      const auth = authState();
+      const auth = authState(db);
 
       log.info("dashboard listening", {
         url,
@@ -143,6 +144,14 @@ async function handle(
 
   securityHeaders(res);
 
+  // Admin surface removed entirely when disabled -- checked before auth, before
+  // session validation, before anything reads a cookie. A public-facing
+  // instance should not even advertise that a portal exists, and 404 here means
+  // there is no login endpoint to grind against.
+  if (!cfg.web.adminEnabled && isAdminPath(path)) {
+    return sendJson(res, 404, { error: "not found" });
+  }
+
   const token = readCookie(req.headers.cookie);
   const isAdmin = validateSession(db, token);
 
@@ -168,7 +177,7 @@ async function handle(
   }
 
   if (path === "/api/session") {
-    const auth = authState();
+    const auth = authState(db);
     return sendJson(res, 200, {
       configured: auth.configured,
       reason: auth.configured ? null : auth.reason,
@@ -180,7 +189,7 @@ async function handle(
   // ---------------------------------------------------------------- public
   if (path === "/api/public") {
     if (!cfg.web.publicEnabled) return sendJson(res, 404, { error: "public dashboard disabled" });
-    if (cfg.web.showWallet) await refreshWallet(cfg).catch(() => {});
+    if (cfg.web.showWallet) await refreshWallet(db, cfg).catch(() => {});
     return sendJson(res, 200, publicSnapshot(db, cfg, kill));
   }
 
@@ -191,13 +200,13 @@ async function handle(
 
   // ----------------------------------------------------------------- admin
   if (path.startsWith("/api/admin")) {
-    const auth = authState();
+    const auth = authState(db);
     if (!auth.configured) return sendJson(res, 503, { error: auth.reason });
     if (!isAdmin) return sendJson(res, 401, { error: "not authenticated" });
 
     if (path === "/api/admin/snapshot") {
-      await refreshWallet(cfg).catch(() => {});
-      return sendJson(res, 200, adminSnapshot(db, cfg, kill, await walletBalance(cfg)));
+      await refreshWallet(db, cfg).catch(() => {});
+      return sendJson(res, 200, adminSnapshot(db, cfg, kill, await walletBalance(db, cfg)));
     }
 
     if (path === "/api/admin/stream") {
@@ -245,6 +254,31 @@ async function handle(
         });
       }
 
+      case "/api/admin/password": {
+        // Authorised by the session above; the throttle inside changePassword
+        // is a CPU guard, not an auth control. Keys on the socket address.
+        const result = changePassword(
+          db,
+          typeof body.current === "string" ? body.current : "",
+          typeof body.next === "string" ? body.next : "",
+          typeof body.confirm === "string" ? body.confirm : "",
+          throttleKey,
+        );
+
+        if (!result.ok) {
+          // The reason is safe to record -- it never contains the password.
+          auditAction(db, "password_change_failed", result.reason, ip);
+          return sendJson(res, result.status, {
+            error: result.reason, retryAfterMs: result.retryAfterMs,
+          });
+        }
+
+        auditAction(db, "password_changed", "admin password rotated", ip);
+        // Every session is gone, including this one, so drop the cookie too.
+        res.setHeader("set-cookie", clearCookieHeader(secureCookies));
+        return sendJson(res, 200, { ok: true, signedOut: true });
+      }
+
       case "/api/admin/revoke-sessions": {
         const n = revokeAllSessions(db);
         auditAction(db, "revoke_sessions", `revoked ${n}`, ip);
@@ -260,7 +294,7 @@ async function handle(
   if (path === "/api/health") {
     return sendJson(res, 200, {
       ok: true,
-      adminConfigured: authState().configured,
+      adminConfigured: authState(db).configured,
       sessions: sessionCount(db),
       publicEnabled: cfg.web.publicEnabled,
     });
@@ -337,6 +371,51 @@ function securityHeaders(res: ServerResponse): void {
   res.setHeader("permissions-policy", "geolocation=(), microphone=(), camera=()");
 }
 
+/**
+ * Assets referenced by the HTML, whose URLs get a content hash appended.
+ *
+ * The origin sends `cache-control: no-cache` on everything, but Cloudflare's
+ * default Browser Cache TTL overrides that for static extensions and hands
+ * visitors a 4-hour TTL on `.css`/`.js` while leaving `.html` uncached. So the
+ * browser can hold NEW markup against OLD styles for hours, which is not a
+ * cosmetic problem: `nav.social`'s inline `<svg>` has a viewBox and no
+ * intrinsic size, so with its rule missing each icon expanded to fill the
+ * column -- a 1228px GitHub logo below the disclaimer. Measured, not guessed.
+ *
+ * Appending the hash makes the URL change whenever the bytes change, so a
+ * stale copy is never *requested*, and correctness stops depending on an edge
+ * setting we do not control from this repo. Deliberately a query string and
+ * not a renamed file: `serveStatic` still resolves the real path because the
+ * router keys on `url.pathname` (see `handle`), so there is nothing to rewrite
+ * on the way back in.
+ */
+export const VERSIONED_ASSETS = ["/styles.css", "/app.js", "/admin.js"] as const;
+
+/** Hashes are stable for the life of the process; a deploy restarts it. */
+const assetVersions = new Map<string, string>();
+
+async function assetVersion(urlPath: string): Promise<string> {
+  const cached = assetVersions.get(urlPath);
+  if (cached !== undefined) return cached;
+  let version = "0"; // missing asset: emit a stable marker rather than throwing
+  try {
+    const bytes = await readFile(join(PUBLIC_DIR, urlPath.slice(1)));
+    version = createHash("sha256").update(bytes).digest("hex").slice(0, 10);
+  } catch { /* fall through to "0" */ }
+  assetVersions.set(urlPath, version);
+  return version;
+}
+
+export async function versionAssetUrls(html: string): Promise<string> {
+  let out = html;
+  for (const asset of VERSIONED_ASSETS) {
+    const quoted = `"${asset}"`;
+    if (!out.includes(quoted)) continue;
+    out = out.replaceAll(quoted, `"${asset}?v=${await assetVersion(asset)}"`);
+  }
+  return out;
+}
+
 async function serveStatic(res: ServerResponse, file: string): Promise<void> {
   // Resolve inside PUBLIC_DIR and verify containment, so "../" cannot escape.
   const target = resolve(join(PUBLIC_DIR, normalize(file)));
@@ -348,7 +427,10 @@ async function serveStatic(res: ServerResponse, file: string): Promise<void> {
     const info = await stat(target);
     if (!info.isFile()) return sendJson(res, 404, { error: "not found" });
 
-    const body = await readFile(target);
+    let body = await readFile(target);
+    if (extname(target) === ".html") {
+      body = Buffer.from(await versionAssetUrls(body.toString("utf8")), "utf8");
+    }
     res.writeHead(200, {
       "content-type": MIME[extname(target)] ?? "application/octet-stream",
       "content-length": body.length,
@@ -426,15 +508,38 @@ function displayIp(req: IncomingMessage, cfg: Config): string {
  * must degrade the number shown, not break the dashboard, and capacity falls
  * back to the static cap when the balance is unknown.
  */
-async function walletBalance(cfg: Config): Promise<number | undefined> {
+async function walletBalance(db: Db, cfg: Config): Promise<number | undefined> {
   if (cfg.dryRun) return undefined;
   try {
     const { getBalanceSol } = await import("../chain/rpc.ts");
-    const { loadWallet } = await import("../chain/wallet.ts");
-    return await getBalanceSol(cfg, loadWallet(cfg).publicKey);
+    const { publishedWalletAddress } = await import("../chain/wallet.ts");
+    const { PublicKey } = await import("@solana/web3.js");
+    // Invariant 4: read the address the bot published, never resolve it from
+    // the secret here. An address is public information; the keypair it came
+    // from is not, and the secret-loading path caches that keypair inside
+    // whatever process calls it -- which would be this one.
+    const address = publishedWalletAddress(db);
+    if (!address) return undefined;
+    return await getBalanceSol(cfg, new PublicKey(address));
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Every path that belongs to the admin surface -- the API, the auth endpoints,
+ * and the static assets that make up the portal page.
+ *
+ * The auth endpoints count as admin: leaving `/api/login` reachable on an
+ * instance with no portal would expose a password oracle for no benefit. Only
+ * `admin.js` ever calls them, so the public page loses nothing.
+ */
+export function isAdminPath(path: string): boolean {
+  if (path.startsWith("/api/admin")) return true;
+  if (path === "/api/login" || path === "/api/logout" || path === "/api/session") return true;
+  if (path === "/admin" || path === "/admin/" || path === "/admin.html") return true;
+  if (path === "/admin.js") return true;
+  return false;
 }
 
 function hash(s: string): string {

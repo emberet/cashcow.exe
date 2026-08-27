@@ -1,3 +1,4 @@
+import type { Keypair } from "@solana/web3.js";
 import type { Db } from "../util/db.ts";
 import { isPretend, type Config } from "../config/schema.ts";
 import { BudgetGuard, BudgetDenied } from "../risk/budget.ts";
@@ -9,18 +10,21 @@ import {
   type Candidate,
 } from "../scoring/score.ts";
 import { compileFilters, checkTerm, checkAll } from "../scoring/filters.ts";
-import { checkSaturation } from "../scoring/saturation.ts";
+import { checkSaturation, findSelfDuplicate, DuplicateIdentityError } from "../scoring/saturation.ts";
 import { pumpFunMarket } from "../chain/market.ts";
 import { generateIdentity, RiskyTrendError } from "../assets/naming.ts";
 import { renderTokenImage } from "../assets/image.ts";
 import { pinTokenMetadata } from "../assets/ipfs.ts";
-import { launchToken, estimateLaunchCostSol } from "../chain/launch.ts";
+import { launchToken, estimateLaunchCostSol, type LaunchResult } from "../chain/launch.ts";
+import { grindMintKeypairParallel } from "../chain/vanity.ts";
+import { availableParallelism } from "node:os";
 import { claimCreatorFees } from "../chain/fees.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
-import { loadWallet } from "../chain/wallet.ts";
+import { loadWallet, publishWalletAddress } from "../chain/wallet.ts";
 import { openPosition } from "../positions/store.ts";
 import { evaluateOpenPositions } from "../positions/manager.ts";
 import { kvGet, kvSet } from "../util/db.ts";
+import { effectiveScoring } from "../risk/experimentalWindow.ts";
 import { log, errFields } from "../util/log.ts";
 import { sleep } from "../util/http.ts";
 import { consumeCommands } from "../web/commands.ts";
@@ -97,6 +101,12 @@ export async function runLoop(
   let stopping = false;
 
   kill.installSignalHandlers(() => { stopping = true; });
+
+  // Publish the address for the dashboard. This process is the one that is
+  // allowed to hold the key, so it is the one that resolves the address --
+  // the web process reads it from the database and never loads the secret
+  // itself (invariant 4). No-op when no real wallet is configured.
+  publishWalletAddress(db, cfg);
 
   log.info("cashcow.exe started", {
     mode: cfg.dryRun ? "DRY RUN (no transactions)" : "LIVE",
@@ -182,16 +192,23 @@ export async function launchTick(
   const results = await pollAll(ctx);
   const weights = new Map(enabledFeeds(cfg).map(({ adapter, weight }) => [adapter.id, weight]));
   const rawSignals = results.flatMap((r) => r.signals);
-  const phraseCount = ingestSignals(db, rawSignals, weights);
+  const phraseCount = ingestSignals(db, rawSignals, weights, cfg.scoring);
 
-  const candidates = buildCandidates(db, cfg.scoring);
+  // Reads through the 24h experimental window (src/risk/experimentalWindow.ts)
+  // when one is active; otherwise identical to cfg.scoring. Every downstream
+  // gate in this function (buildCandidates/checkWarmup/qualifying) reads this
+  // value, not cfg.scoring, so the window and the base config never disagree
+  // mid-tick.
+  const scoring = effectiveScoring(db, cfg);
+
+  const candidates = buildCandidates(db, scoring);
   stats.candidates = candidates.length;
 
   const funnel: Funnel = {
     sniffed: rawSignals.length,
     phrases: phraseCount,
     terms: candidates.length,
-    warm: candidates.filter((c) => c.observations >= cfg.scoring.minObservations).length,
+    warm: candidates.filter((c) => c.observations >= scoring.minObservations).length,
     scored: 0, examined: 0, clean: 0, uncrowded: 0, affordable: 0, launched: 0,
   };
 
@@ -201,20 +218,20 @@ export async function launchTick(
     return stats;
   }
 
-  const warm = checkWarmup(db, cfg.scoring);
+  const warm = checkWarmup(db, scoring);
   if (!warm.warm) {
     log.info("warming up", { spanMinutes: warm.spanMinutes.toFixed(1), reason: warm.reason });
     recordFunnel(db, cfg, funnel);
     return stats;
   }
 
-  const passing = qualifying(candidates, cfg.scoring);
+  const passing = qualifying(candidates, scoring);
   stats.qualified = passing.length;
   funnel.scored = passing.length;
   if (!passing.length) {
     recordFunnel(db, cfg, funnel);
     log.debug("no candidate cleared the threshold", {
-      candidates: candidates.length, threshold: cfg.scoring.threshold,
+      candidates: candidates.length, threshold: scoring.threshold,
       best: candidates[0]?.score.toFixed(1),
     });
     return stats;
@@ -296,6 +313,17 @@ export async function launchTick(
         });
         continue;
       }
+      if (e instanceof DuplicateIdentityError) {
+        log.info("generated identity duplicates a recent launch, skipping", {
+          term: candidate.term, detail: e.detail,
+        });
+        reject("duplicate");
+        recordDecline(db, cfg, {
+          term: candidate.term, norm: candidate.key, score: candidate.score,
+          reason: "duplicate", detail: e.detail,
+        });
+        continue;
+      }
       if (e instanceof BudgetDenied) {
         log.warn("launch denied at execution time", { term: candidate.term, code: e.code });
         reject(`budget:${e.code}`);
@@ -337,7 +365,22 @@ async function launchCandidate(
     throw new Error(`generated identity rejected: ${check.reason}`);
   }
 
-  const image = await renderTokenImage(cfg, identity);
+  // ...and a trend that looked distinct can still be renamed into a collision:
+  // "Fed Rate Decision" and "FOMC Meeting" are unlike each other as terms, and
+  // both plausibly mint as "MoneyPrinter". The gate upstream only saw the term
+  // and had no symbol to compare, so this is the first point the real name and
+  // ticker exist. Cheaper than the render and pin that follow.
+  const nameDupe = findSelfDuplicate(db, identity.name, identity.symbol, cfg.saturation);
+  if (nameDupe) {
+    const agoH = ((Date.now() - nameDupe.createdAt) / 3600_000).toFixed(1);
+    throw new DuplicateIdentityError(
+      `"${identity.name}" (${identity.symbol}) matches ` +
+      `${nameDupe.symbol || nameDupe.name} launched ${agoH}h ago ` +
+      `on ${nameDupe.matchedOn}, similarity ${nameDupe.score.toFixed(2)}`,
+    );
+  }
+
+  const image = await renderTokenImage(cfg, identity, candidate.term);
   const pinned = await pinTokenMetadata(cfg, identity, image);
 
   const devBuySol = cfg.devPosition.enabled ? cfg.devPosition.buySol : 0;
@@ -345,12 +388,35 @@ async function launchCandidate(
   // Last gate before money moves.
   budget.assertCanSpend(estimate, { isLaunch: true, opensPosition: devBuySol > 0 });
 
+  let mintKeypair: Keypair | undefined;
+  if (cfg.launch.vanitySuffix) {
+    // Spread the grind across every available core rather than the caller's
+    // single thread -- see src/chain/vanity.ts for why this isn't optional
+    // for anything longer than a 1-2 char suffix.
+    const workers = cfg.launch.vanityWorkers ?? availableParallelism();
+    const ground = await grindMintKeypairParallel(
+      cfg.launch.vanitySuffix, cfg.launch.vanityTimeoutMs, workers,
+    );
+    if (ground) {
+      log.info("vanity mint address found", {
+        suffix: cfg.launch.vanitySuffix, attempts: ground.attempts, ms: ground.ms,
+        mint: ground.keypair.publicKey.toBase58(),
+      });
+      mintKeypair = ground.keypair;
+    } else {
+      log.warn("vanity grind timed out, using a random address", {
+        suffix: cfg.launch.vanitySuffix, timeoutMs: cfg.launch.vanityTimeoutMs,
+      });
+    }
+  }
+
   const result = await launchToken(cfg, {
     name: identity.name,
     symbol: identity.symbol,
     uri: pinned.uri,
     devBuySol,
     slippagePct: cfg.devPosition.buySlippagePct,
+    mintKeypair,
   });
 
   db.prepare(
@@ -363,19 +429,14 @@ async function launchCandidate(
     Date.now(), result.signature ?? null, isPretend(cfg) ? 1 : 0,
   );
 
-  // Prefer the measured wallet delta over the estimate, so the ledger
-  // reconciles against the chain instead of drifting by the transaction fee.
-  const launchCost = result.actualCostSol !== undefined
-    ? Math.max(0, result.actualCostSol - devBuySol)
-    : cfg.launch.estimatedCreateCostSol;
+  const { solDelta: launchCost, measured } = resolveLaunchCost(cfg, result, devBuySol);
 
   budget.record({
     kind: "launch",
     solDelta: -launchCost,
     mint: result.mint,
     signature: result.signature,
-    note: `${identity.symbol} <- "${candidate.term}"` +
-      (result.actualCostSol !== undefined ? " (measured)" : " (estimated)"),
+    note: `${identity.symbol} <- "${candidate.term}"` + (measured ? " (measured)" : " (estimated)"),
   });
 
   if (devBuySol > 0) {
@@ -406,10 +467,49 @@ async function launchCandidate(
   log.info("LAUNCHED", {
     mint: result.mint, name: identity.name, symbol: identity.symbol,
     term: candidate.term, score: candidate.score.toFixed(1),
-    feeds: candidate.feeds, devBuySol, naming: identity.source,
+    feeds: candidate.feeds, devBuySol, naming: identity.source, art: image.theme,
     url: `https://pump.fun/coin/${result.mint}`,
     dryRun: result.dryRun,
   });
+}
+
+/**
+ * What to book against spend_ledger for the "launch" row.
+ *
+ * Prefers the measured wallet delta over the estimate, so the ledger
+ * reconciles against the chain instead of drifting by the transaction fee.
+ * But a measured cost can only ever be non-negative -- create-and-buy cannot
+ * hand money back -- so a negative reading is not "spent nothing", it is
+ * proof the balance snapshot in chain/launch.ts overlapped a concurrent
+ * inflow (a creator-fee claim or a position sell landing mid-window). The old
+ * `Math.max(0, ...)` floor silently turned that corruption into a booked
+ * launch cost of exactly 0. chain/rpc.ts's withBalanceLock now serializes
+ * those windows so this should no longer happen in practice; this is the
+ * belt to that braces -- fail loud and fall back to the estimate rather than
+ * silently under-counting the day's spend against `risk.maxSolPerDay`.
+ */
+export function resolveLaunchCost(
+  cfg: Config, result: LaunchResult, devBuySol: number,
+): { solDelta: number; measured: boolean } {
+  if (result.actualCostSol === undefined) {
+    return { solDelta: cfg.launch.estimatedCreateCostSol, measured: false };
+  }
+
+  const measuredSol = result.actualCostSol - devBuySol;
+  if (measuredSol < 0) {
+    log.warn(
+      "measured launch cost came back negative -- a concurrent balance change likely " +
+      "landed inside the balance snapshot window; falling back to the estimate instead " +
+      "of flooring the ledger to 0",
+      {
+        mint: result.mint, actualCostSol: result.actualCostSol, devBuySol, measuredSol,
+        fallbackSol: cfg.launch.estimatedCreateCostSol,
+      },
+    );
+    return { solDelta: cfg.launch.estimatedCreateCostSol, measured: false };
+  }
+
+  return { solDelta: measuredSol, measured: true };
 }
 
 async function maybeTune(db: Db, cfg: Config): Promise<void> {

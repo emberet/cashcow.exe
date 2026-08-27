@@ -159,6 +159,32 @@ export const saturationSchema = z.object({
   similarityThreshold: z.number().min(0).max(1).default(0.72),
   /** Never launch the same normalised term twice, regardless of the above. */
   neverRelaunchSameTerm: z.boolean().default(true),
+
+  /**
+   * Rolling window in which OUR OWN launches dedupe on similarity alone.
+   *
+   * `maxSimilar` answers "is this trend crowded?", where one other token is
+   * normal and a count threshold is right. It is the wrong instrument for "did
+   * we already mint this?", where one is already one too many -- and because
+   * both self and market tokens land in the same tally, a fresh self-launch
+   * only contributed 1 of the 2 needed and the near-duplicate went out anyway.
+   * Measured against the live DB: with "Crypto Market" launched two hours
+   * earlier, "Crypto Market Crash" (0.90) and "crypto markets" (0.78) both
+   * passed the gate.
+   *
+   * `neverRelaunchSameTerm` does not cover this either -- it is an exact
+   * normalised-key match, so a single added word slips past it.
+   *
+   * Set to 0 to disable.
+   */
+  selfDedupeHours: z.number().nonnegative().default(24),
+  /**
+   * Similarity floor for the self-dedupe window. Separate from
+   * `similarityThreshold` on purpose: that one trades against market crowding,
+   * this one against repeating ourselves, and they should be able to move
+   * independently.
+   */
+  selfDedupeSimilarity: z.number().min(0).max(1).default(0.72),
 });
 
 const feedBase = {
@@ -251,6 +277,64 @@ export const feedsSchema = z.object({
     minMarketCapUsd: z.number().nonnegative().default(50_000),
     maxAgeHours: z.number().positive().default(48),
     limit: z.number().int().positive().max(200).default(60),
+    /**
+     * Rough estimate of pump.fun's graduation market cap in USD, used only to
+     * compute curveProgress (0..1 closeness to bonding-curve graduation).
+     * APPROXIMATE and drifts with SOL price / pump.fun's own curve parameters
+     * -- there is no reserve-level field on this endpoint to compute it
+     * exactly. Tune from observed graduations, not trusted as authoritative.
+     */
+    graduationMarketCapUsd: z.number().positive().default(100_000),
+    /** How much of rawScore comes from curveProgress vs size/freshness. Set
+     *  to 0 to disable the graduation-proximity signal without disabling the
+     *  whole feed. */
+    curveProgressWeight: z.number().min(0).max(1).default(0.25),
+  }).default({}),
+  dexActivity: z.object({
+    ...feedBase,
+    /**
+     * Off by default: unlike the other feeds, each poll fans out to up to
+     * `maxCandidatesPerPoll` DexScreener calls rather than one request. Ships
+     * off per the "safe by default" invariant until validated live with
+     * `npm run feeds`.
+     */
+    enabled: z.boolean().default(false),
+    pollSeconds: z.number().positive().default(600),
+    weight: z.number().min(0).default(0.4),
+    /**
+     * Proxy for "recently migrated": pump.fun's /coins endpoint has no true
+     * migration timestamp, only creation timestamp + a `complete` flag, so
+     * this filters on age-since-creation instead.
+     */
+    candidateMaxAgeHours: z.number().positive().default(72),
+    /** Caps DexScreener calls per poll. */
+    maxCandidatesPerPoll: z.number().int().positive().max(50).default(15),
+    concurrency: z.number().int().positive().max(10).default(3),
+    /** Below this, a buy/sell imbalance is too easy to move on thin liquidity
+     *  to mean anything. */
+    minLiquidityUsd: z.number().nonnegative().default(20_000),
+    /**
+     * Inclusive band on buys as a percentage of 24h transactions. Below the
+     * floor there's no real imbalance to report; above the ceiling is the
+     * same near-100%-buys pattern src/research/classify.ts's own
+     * DEFAULT_THRESHOLDS treats as an untested pump or wash-trading
+     * fingerprint, not stronger organic accumulation -- so the signal is
+     * deliberately NOT monotonic past this ceiling.
+     *
+     * UNVALIDATED DEFAULTS -- checked against 25 real graduated pump.fun
+     * coins (2026-08-27): freshly-migrated tokens clustered at 86-98% buy
+     * share (above this ceiling), long-settled ones at 38-55% (below this
+     * floor); only one sample landed inside 60-85, near the ceiling. Left
+     * as-is rather than fit to a 25-sample snapshot -- validate against
+     * `backtest-launches` / a longer `npm run feeds` sample before flipping
+     * `enabled: true`, per the feed's own "ships off until validated" doc
+     * comment above.
+     */
+    minBuyShareForSignal: z.number().min(50).max(100).default(60),
+    maxBuyShareForSignal: z.number().min(50).max(100).default(85),
+    /** Reuses classify.ts's washSuspicionScore (txCount/replies) as a hard
+     *  dampener; above this the signal is zeroed regardless of buy share. */
+    maxWashSuspicionScore: z.number().positive().default(5),
   }).default({}),
 }).default({});
 
@@ -294,13 +378,43 @@ export const assetsSchema = z.object({
     maxNameLength: z.number().int().positive().default(32),
     minTickerLength: z.number().int().positive().default(3),
     maxTickerLength: z.number().int().positive().default(8),
+    /**
+     * pump.fun publishes no description limit, so this is our choice, not
+     * theirs. 200 characters is what the code already truncated at; the model
+     * prompt asked for 120 and the two disagreed silently, so a compliant model
+     * wrote 120 and a chatty one got cut mid-word at 200. One number now feeds
+     * both. Lives off-chain in the metadata JSON, so it costs no packet bytes.
+     */
+    maxDescriptionLength: z.number().int().positive().default(200),
     apiKeyEnv: z.string().default("ANTHROPIC_API_KEY"),
   }).default({}),
   image: z.object({
     /** `template` renders locally for ~free; `none` requires a fallback image. */
     mode: z.enum(["template", "none"]).default("template"),
-    width: z.number().int().positive().default(512),
-    height: z.number().int().positive().default(512),
+    /**
+     * 1000x1000 square, because that is pump.fun's stated MINIMUM resolution
+     * for a coin image -- "Minimum resolution: 1000x1000px", recommended
+     * aspect ratio 1:1 (square), max 15MB, .jpg/.gif/.png:
+     * https://intercom.help/pumpfun-web/en/articles/11002205-create-a-coin-on-pump-fun
+     *
+     * This was 512x512, i.e. UNDER their floor. Nothing here touches the launch
+     * transaction -- the image is referenced by IPFS URL, not embedded -- so
+     * raising it costs pin size only, never the ~17 bytes of packet headroom
+     * the create instruction has left.
+     */
+    width: z.number().int().positive().default(1000),
+    height: z.number().int().positive().default(1000),
+    /**
+     * Pick the artwork template from the trend text (see assets/theme.ts):
+     * a terminal/ASCII face for AI and compute trends, a loud meme-poster face
+     * for political ones, the gradient monogram for everything else.
+     *
+     * Off by default so the repo default keeps rendering exactly what it
+     * rendered before. Purely cosmetic either way -- every template is drawn
+     * locally from primitives, costs nothing per launch, and reproduces from
+     * the ticker alone.
+     */
+    themed: z.boolean().default(false),
   }).default({}),
   ipfs: z.object({
     provider: z.literal("pinata").default("pinata"),
@@ -379,6 +493,33 @@ export const configSchema = z.object({
      * the network and no lamports move.
      */
     simulate: z.boolean().default(false),
+    /**
+     * If set, grind a mint keypair whose address ends in this suffix before
+     * launching (e.g. "pump", matching pump.fun's own frontend vanity
+     * convention -- cosmetic only, not required by the on-chain program).
+     * Off by default: it adds latency to every launch it touches, so it must
+     * be opted into per-run via an override, never silently on for the
+     * automated pipeline.
+     */
+    vanitySuffix: z.string().optional(),
+    /**
+     * Give up and fall back to a random address rather than stall a launch.
+     *
+     * Measured on the deploy machine at ~9,400 Keypair.generate()/sec/core, a
+     * 4-char suffix needs ~11.3M expected attempts -- the earlier 45s default
+     * was sized for a "quick grind" assumption that turned out wrong by ~40x.
+     * 300s gives real headroom (not just the expected case but the geometric
+     * distribution's tail) once spread across `vanityWorkers` cores; grinding
+     * a longer suffix or running on fewer cores will still time out and fall
+     * back to a random address, which is the intended fail-open behaviour.
+     */
+    vanityTimeoutMs: z.number().positive().default(300_000),
+    /**
+     * OS threads to spread the grind across. Unset uses every core the
+     * runtime reports available (`os.availableParallelism()`), since the
+     * search is independent per-worker and near-linear in core count.
+     */
+    vanityWorkers: z.number().int().positive().optional(),
   }).default({}),
   risk: riskSchema.default({}),
   devPosition: devPositionSchema.default({}),
@@ -426,6 +567,23 @@ export const configSchema = z.object({
     port: z.number().int().min(1).max(65535).default(4600),
     /** Serve the public dashboard. Turn off to run an admin-only instance. */
     publicEnabled: z.boolean().default(true),
+    /**
+     * Serve the admin portal at all.
+     *
+     * A configured password is NOT sufficient protection for an
+     * internet-facing instance, for a reason that is easy to miss: login
+     * throttling keys on the socket address (invariant 10), and behind a
+     * tunnel or reverse proxy every request arrives from 127.0.0.1. That
+     * collapses the per-attacker throttle into a single shared bucket -- so
+     * one attacker's failures lock out the operator, and the limit no longer
+     * tracks individual attackers at all.
+     *
+     * When this is off the admin routes and assets return 404 before any auth
+     * check runs: the surface is absent, not merely guarded. Run the
+     * public-facing instance with this false and keep an admin instance on
+     * loopback.
+     */
+    adminEnabled: z.boolean().default(true),
     /** How often the server re-reads state and pushes to connected browsers. */
     pushIntervalSeconds: z.number().positive().default(3),
     /** Set true when running behind an HTTPS reverse proxy, so cookies get Secure. */

@@ -3,6 +3,7 @@ import type { Config } from "../config/schema.ts";
 import { log } from "../util/log.ts";
 import type { Capacity } from "./capacity.ts";
 import { isPretend } from "../config/schema.ts";
+import { effectiveRisk } from "./experimentalWindow.ts";
 
 /**
  * The single choke point for anything that costs SOL.
@@ -29,6 +30,17 @@ export type SpendRecord = {
   mint?: string;
   signature?: string;
   note?: string;
+  /**
+   * Which ledger this settles against. Defaults to the guard's own mode
+   * (the config this process started with), which is correct for spend that
+   * originates and settles within one tick -- a launch and its dev_buy.
+   *
+   * A position's exit can land in a different process run than its open, so
+   * it must carry the position's OWN dry_run forward rather than inherit
+   * whatever config happens to be active when the sell settles. Passing it
+   * explicitly here is what keeps the two in sync.
+   */
+  dryRun?: boolean;
 };
 
 export type Decision =
@@ -75,13 +87,13 @@ export class BudgetGuard {
   get effectiveMaxLaunchesPerDay(): number {
     // computeCapacity() already returns the static value when adaptive is off,
     // and has already clamped against every ceiling when it is on.
-    return this.#capacity?.launchesPerDay ?? this.#cfg.risk.maxLaunchesPerDay;
+    return this.#capacity?.launchesPerDay ?? effectiveRisk(this.#db, this.#cfg).maxLaunchesPerDay;
   }
 
   get effectiveMaxSolPerDay(): number {
     // Belt and braces: re-clamp against the static ceiling here too, so a bug
     // in the capacity maths still cannot authorise spending past it.
-    const configured = this.#cfg.risk.maxSolPerDay;
+    const configured = effectiveRisk(this.#db, this.#cfg).maxSolPerDay;
     return this.#capacity ? Math.min(this.#capacity.solPerDay, configured) : configured;
   }
 
@@ -137,7 +149,7 @@ export class BudgetGuard {
     estimatedCostSol: number,
     opts: { isLaunch?: boolean; walletBalanceSol?: number; opensPosition?: boolean } = {},
   ): Decision {
-    const r = this.#cfg.risk;
+    const r = effectiveRisk(this.#db, this.#cfg);
 
     const maxLaunches = this.effectiveMaxLaunchesPerDay;
     const maxSol = this.effectiveMaxSolPerDay;
@@ -195,12 +207,13 @@ export class BudgetGuard {
 
   /** Append the actual outcome. Call after the transaction settles, win or lose. */
   record(rec: SpendRecord): void {
+    const mode = rec.dryRun === undefined ? this.#mode : (rec.dryRun ? 1 : 0);
     this.#db.prepare(
       `INSERT INTO spend_ledger (ts, kind, mint, sol_delta, signature, dry_run, note)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       Date.now(), rec.kind, rec.mint ?? null, rec.solDelta,
-      rec.signature ?? null, this.#mode, rec.note ?? null,
+      rec.signature ?? null, mode, rec.note ?? null,
     );
     log.debug("ledger", { kind: rec.kind, solDelta: rec.solDelta, mint: rec.mint });
   }
@@ -211,7 +224,7 @@ export class BudgetGuard {
     openPositions: number; maxPositions: number; dryRun: boolean;
     adaptive: boolean; binding: string;
   } {
-    const r = this.#cfg.risk;
+    const r = effectiveRisk(this.#db, this.#cfg);
     return {
       windowHours: 24,
       launches: this.launchesLast24h(), maxLaunches: this.effectiveMaxLaunchesPerDay,
