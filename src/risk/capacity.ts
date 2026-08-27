@@ -1,6 +1,7 @@
 import type { Db } from "../util/db.ts";
 import { isPretend, type Config } from "../config/schema.ts";
 import { outcomeSummary } from "../learning/outcomes.ts";
+import { effectiveRisk } from "./experimentalWindow.ts";
 
 /**
  * How many launches the wallet can actually sustain today.
@@ -89,15 +90,22 @@ export function computeCapacity(
 ): Capacity {
   const perLaunch = costPerLaunch(cfg);
   const a = cfg.risk.adaptive;
+  // Reads through the 24h experimental window (src/risk/experimentalWindow.ts)
+  // when one is active; identical to cfg.risk otherwise. This IS "the static
+  // ceiling" everything below clamps against -- computing capacity from the
+  // un-windowed cfg.risk here would silently defeat the window, because
+  // BudgetGuard.setCapacity() re-clamps to min(capacity, effectiveRisk) on
+  // every spend check.
+  const risk = effectiveRisk(db, cfg);
 
   if (!a.enabled) {
     return {
-      launchesPerDay: cfg.risk.maxLaunchesPerDay,
-      solPerDay: cfg.risk.maxSolPerDay,
+      launchesPerDay: risk.maxLaunchesPerDay,
+      solPerDay: risk.maxSolPerDay,
       costPerLaunchSol: perLaunch,
-      binding: `static cap: ${cfg.risk.maxLaunchesPerDay} launches/day`,
+      binding: `static cap: ${risk.maxLaunchesPerDay} launches/day`,
       adaptive: false,
-      detail: { staticCeilingSol: cfg.risk.maxSolPerDay, throttled: false },
+      detail: { staticCeilingSol: risk.maxSolPerDay, throttled: false },
     };
   }
 
@@ -105,12 +113,12 @@ export function computeCapacity(
   // to the static cap rather than guessing — guessing here spends real money.
   if (walletBalanceSol === undefined) {
     return {
-      launchesPerDay: cfg.risk.maxLaunchesPerDay,
-      solPerDay: cfg.risk.maxSolPerDay,
+      launchesPerDay: risk.maxLaunchesPerDay,
+      solPerDay: risk.maxSolPerDay,
       costPerLaunchSol: perLaunch,
       binding: "wallet balance unknown; falling back to the static cap",
       adaptive: true,
-      detail: { staticCeilingSol: cfg.risk.maxSolPerDay, throttled: false },
+      detail: { staticCeilingSol: risk.maxSolPerDay, throttled: false },
     };
   }
 
@@ -118,12 +126,12 @@ export function computeCapacity(
   const runwayBudget = spendable / a.minRunwayDays;
   const burnBudget = spendable * a.maxDailyBurnPct;
 
-  // The static ceiling remains an absolute maximum.
-  let solPerDay = Math.min(runwayBudget, burnBudget, cfg.risk.maxSolPerDay);
+  // The static (possibly windowed) ceiling remains an absolute maximum.
+  let solPerDay = Math.min(runwayBudget, burnBudget, risk.maxSolPerDay);
 
   let binding: string;
-  if (solPerDay === cfg.risk.maxSolPerDay) {
-    binding = `static ceiling risk.maxSolPerDay (${cfg.risk.maxSolPerDay} SOL)`;
+  if (solPerDay === risk.maxSolPerDay) {
+    binding = `static ceiling risk.maxSolPerDay (${risk.maxSolPerDay} SOL)`;
   } else if (runwayBudget <= burnBudget) {
     binding = `${a.minRunwayDays}-day runway on ${spendable.toFixed(3)} SOL spendable`;
   } else {
@@ -207,7 +215,7 @@ export function computeCapacity(
       spendableSol: spendable,
       runwayBudgetSol: runwayBudget,
       burnBudgetSol: burnBudget,
-      staticCeilingSol: cfg.risk.maxSolPerDay,
+      staticCeilingSol: risk.maxSolPerDay,
       throttled,
       throttleReason,
       newsVolume,

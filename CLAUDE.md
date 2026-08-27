@@ -76,7 +76,7 @@ understanding what it was protecting against.
 ## Commands
 
 ```bash
-npm test                       # 235 tests — run before every commit
+npm test                       # 249 tests — run before every commit
 npx tsc --noEmit               # typecheck (no build step; Node strips types)
 
 npm run preflight              # verify every credential BY USING IT; nothing is signed
@@ -94,6 +94,10 @@ node src/cli.ts outcomes       # what happened to launched tokens
 node src/cli.ts learn --mandate  # exactly what the tuner may touch
 node src/cli.ts tuning --clear # discard everything learned
 node src/cli.ts halt "reason"  # stop launches (exits continue)
+node src/cli.ts boost-window --hours 24  # temporarily widen risk caps + the
+                                #   scoring gate, self-reverting; see Gotchas
+node src/cli.ts boost-window --status   # is a window active, and until when
+node src/cli.ts boost-window --clear    # cancel a window early
 node src/cli.ts profit [--record]  # net profit to date; --record snapshots the
                                 #   calculated 40/50/10 split (needs distribution.enabled)
 node src/cli.ts backtest-launches  # one-time historical research pass; proposes
@@ -206,6 +210,30 @@ generated identity, because the ticker does not exist until the model has run.
 - **Fonts are self-hosted** in `public/fonts` (Bagel Fat One, Baloo 2, latin
   subset, ~55KB). Do not swap them for a Google Fonts link — `font-src 'self'`
   would block it, and the dashboard should work with no network.
+- **`boost-window` is the sanctioned way to temporarily widen launch activity
+  — never hand-edit `config.json`'s `risk.*`/`scoring.threshold` for
+  "testing".** That was tried once: a comment promised to revert 10/0.85/0.5/5
+  back to the deliberate 1/0.1/0.06/1 baseline "when testing is done," and the
+  revert never happened because nothing forced it to. `src/risk/
+  experimentalWindow.ts` fixes that structurally: `node src/cli.ts
+  boost-window --hours 24` writes a bounded, timestamped record to `kv` that
+  `BudgetGuard` (via `effectiveRisk()`) and `launchTick`/`score` (via
+  `effectiveScoring()`) read live on every decision — no restart to apply it,
+  no restart or external cron to revert it. Every field is clamped to
+  `EXPERIMENTAL_CEILINGS` (hardcoded, separate from the request) and the
+  scoring floors reuse the tuner's own vetted `TUNABLE` bounds, so a human
+  override can never be more permissive than what the tuner is already
+  allowed to reach. This is **not** the tuner: separate storage (`kv`, not
+  `data/tuning.json`), separate trigger (a human on the CLI, not the learning
+  loop), and it cannot touch `filters.*`/`wallet.*`/`rpc.*`/`launch.*`/
+  `devPosition.*` at all — only four `risk.*` numbers and
+  `scoring.threshold`/`minObservations`. Fails closed: a missing, malformed,
+  or expired `kv` row is treated as no window, never as a wider one. Note
+  `computeCapacity()` (`src/risk/capacity.ts`) also had to route through
+  `effectiveRisk()` — `BudgetGuard.setCapacity()` always re-clamps to
+  `min(capacity, effectiveRisk)`, so leaving capacity on the un-windowed
+  static value would have silently defeated the window whenever adaptive
+  capacity is off (the default).
 
 ---
 

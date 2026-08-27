@@ -24,6 +24,9 @@ import {
 } from "./web/auth.ts";
 import { createInterface } from "node:readline/promises";
 import { computeCapacity, balanceNeededFor, costPerLaunch } from "./risk/capacity.ts";
+import {
+  setExperimentalWindow, getExperimentalWindow, clearExperimentalWindow, effectiveScoring,
+} from "./risk/experimentalWindow.ts";
 import { outcomeSummary, settledOutcomes, refreshOutcomes } from "./learning/outcomes.ts";
 import { runTuning, tuningHistory } from "./learning/tuner.ts";
 import { overlaySummary, clearOverlay, writeOverlay } from "./learning/overlay.ts";
@@ -60,6 +63,18 @@ cashcow.exe -- trend detection to pump.fun launcher
   tuning [--clear]      Show or discard what the tuner has learned
   halt [reason]         Stop new launches (open positions still exit)
   resume                Clear the halt
+  boost-window [--hours N] [--reason "..."] [--max-launches-per-day N]
+               [--max-sol-per-day N] [--max-daily-loss-sol N]
+               [--max-concurrent-positions N] [--threshold N] [--min-observations N]
+                        Temporarily widen risk caps + the scoring gate for N
+                        hours (default 24), self-reverting on expiry -- no
+                        restart needed to apply or revert. Every value is
+                        clamped to src/risk/experimentalWindow.ts's
+                        EXPERIMENTAL_CEILINGS, which never exceeds what
+                        config.json or the tuner allowlist already consider
+                        safe. NOT the tuner -- separate storage, human-only.
+  boost-window --status   Show whether a window is active and its effective values
+  boost-window --clear    Cancel an active window early
   backtest-launches [--days-ago-start N] [--days-ago-end N] [--max-pages N] [--rpc URL]
                          One-time historical research pass over past pump.fun
                          launches; writes a report, proposes scoring changes
@@ -147,17 +162,20 @@ async function main() {
       const n = ingestSignals(db, signals, weights, cfg.scoring);
       log.info("signals ingested", { raw: signals.length, phrases: n });
 
-      const candidates = buildCandidates(db, cfg.scoring);
+      // Reflects a live 24h boost-window if one is active, so this diagnostic
+      // matches what the runner would actually decide right now.
+      const scoring = effectiveScoring(db, cfg);
+      const candidates = buildCandidates(db, scoring);
       const filters = compileFilters(cfg.filters);
-      const passing = qualifying(candidates, cfg.scoring);
+      const passing = qualifying(candidates, scoring);
 
-      console.log(`\n${candidates.length} candidates, ${passing.length} above threshold ${cfg.scoring.threshold}\n`);
+      console.log(`\n${candidates.length} candidates, ${passing.length} above threshold ${scoring.threshold}\n`);
       console.log("  score  vel  corr  affin tick  feeds                term");
       console.log("  " + "-".repeat(84));
 
       for (const c of candidates.slice(0, 25)) {
         const f = checkTerm(c.term, filters);
-        const mark = !f.allowed ? "BLOCKED" : c.score >= cfg.scoring.threshold ? "PASS" : "";
+        const mark = !f.allowed ? "BLOCKED" : c.score >= scoring.threshold ? "PASS" : "";
         const k = c.components;
         console.log(
           `  ${c.score.toFixed(1).padStart(5)}  ${k.velocity.toFixed(2)} ${k.corroboration.toFixed(2)}  ` +
@@ -484,6 +502,69 @@ async function main() {
     case "resume":
       kill.resume();
       break;
+
+    case "boost-window": {
+      if (flags.get("status") === true) {
+        const w = getExperimentalWindow(db);
+        if (!w) {
+          console.log("\n  no experimental window active -- standard limits in effect\n");
+          break;
+        }
+        const remainingH = ((w.expiresAt - Date.now()) / 3600_000).toFixed(1);
+        console.log(`\n  ACTIVE -- ${remainingH}h remaining, expires ${new Date(w.expiresAt).toISOString()}`);
+        console.log(`  reason                       ${w.reason}`);
+        console.log(`  risk.maxLaunchesPerDay       ${w.risk.maxLaunchesPerDay}`);
+        console.log(`  risk.maxSolPerDay            ${w.risk.maxSolPerDay}`);
+        console.log(`  risk.maxDailyLossSol         ${w.risk.maxDailyLossSol}`);
+        console.log(`  risk.maxConcurrentPositions  ${w.risk.maxConcurrentPositions}`);
+        console.log(`  scoring.threshold            ${w.scoring.threshold}`);
+        console.log(`  scoring.minObservations      ${w.scoring.minObservations}\n`);
+        break;
+      }
+
+      if (flags.get("clear") === true) {
+        clearExperimentalWindow(db, positional.join(" ") || "manual clear via CLI");
+        console.log("\n  cleared -- standard limits in effect immediately\n");
+        break;
+      }
+
+      const num = (key: string, fallback: number) => {
+        const v = flags.get(key);
+        return typeof v === "string" && Number.isFinite(Number(v)) ? Number(v) : fallback;
+      };
+      const reasonFlag = flags.get("reason");
+
+      const record = setExperimentalWindow(db, {
+        hours: num("hours", 24),
+        reason: typeof reasonFlag === "string" ? reasonFlag : (positional.join(" ") || undefined),
+        base: {
+          maxLaunchesPerDay: cfg.risk.maxLaunchesPerDay,
+          maxSolPerDay: cfg.risk.maxSolPerDay,
+          maxDailyLossSol: cfg.risk.maxDailyLossSol,
+          maxConcurrentPositions: cfg.risk.maxConcurrentPositions,
+          threshold: cfg.scoring.threshold,
+          minObservations: cfg.scoring.minObservations,
+        },
+        maxLaunchesPerDay: num("max-launches-per-day", 10),
+        maxSolPerDay: num("max-sol-per-day", 0.85),
+        maxDailyLossSol: num("max-daily-loss-sol", 0.5),
+        maxConcurrentPositions: num("max-concurrent-positions", 5),
+        threshold: num("threshold", 40),
+        minObservations: num("min-observations", 2),
+      });
+
+      const hoursActual = (record.expiresAt - record.createdAt) / 3600_000;
+      console.log(`\n  experimental window OPEN for ${hoursActual.toFixed(1)}h, expires ${new Date(record.expiresAt).toISOString()}`);
+      console.log(`  risk.maxLaunchesPerDay       ${record.risk.maxLaunchesPerDay}`);
+      console.log(`  risk.maxSolPerDay            ${record.risk.maxSolPerDay}`);
+      console.log(`  risk.maxDailyLossSol         ${record.risk.maxDailyLossSol}`);
+      console.log(`  risk.maxConcurrentPositions  ${record.risk.maxConcurrentPositions}`);
+      console.log(`  scoring.threshold            ${record.scoring.threshold}`);
+      console.log(`  scoring.minObservations      ${record.scoring.minObservations}`);
+      console.log(`  live immediately, no restart -- reverts automatically at expiry`);
+      console.log(`  ('boost-window --status' to check, '--clear' to cancel early)\n`);
+      break;
+    }
 
     case "backtest-launches": {
       const { runBacktest, DEFAULT_BACKTEST_OPTS } = await import("./research/backtest.ts");

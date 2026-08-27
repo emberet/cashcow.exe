@@ -3,6 +3,7 @@ import type { Config } from "../config/schema.ts";
 import { log } from "../util/log.ts";
 import type { Capacity } from "./capacity.ts";
 import { isPretend } from "../config/schema.ts";
+import { effectiveRisk } from "./experimentalWindow.ts";
 
 /**
  * The single choke point for anything that costs SOL.
@@ -86,13 +87,13 @@ export class BudgetGuard {
   get effectiveMaxLaunchesPerDay(): number {
     // computeCapacity() already returns the static value when adaptive is off,
     // and has already clamped against every ceiling when it is on.
-    return this.#capacity?.launchesPerDay ?? this.#cfg.risk.maxLaunchesPerDay;
+    return this.#capacity?.launchesPerDay ?? effectiveRisk(this.#db, this.#cfg).maxLaunchesPerDay;
   }
 
   get effectiveMaxSolPerDay(): number {
     // Belt and braces: re-clamp against the static ceiling here too, so a bug
     // in the capacity maths still cannot authorise spending past it.
-    const configured = this.#cfg.risk.maxSolPerDay;
+    const configured = effectiveRisk(this.#db, this.#cfg).maxSolPerDay;
     return this.#capacity ? Math.min(this.#capacity.solPerDay, configured) : configured;
   }
 
@@ -148,7 +149,7 @@ export class BudgetGuard {
     estimatedCostSol: number,
     opts: { isLaunch?: boolean; walletBalanceSol?: number; opensPosition?: boolean } = {},
   ): Decision {
-    const r = this.#cfg.risk;
+    const r = effectiveRisk(this.#db, this.#cfg);
 
     const maxLaunches = this.effectiveMaxLaunchesPerDay;
     const maxSol = this.effectiveMaxSolPerDay;
@@ -223,7 +224,7 @@ export class BudgetGuard {
     openPositions: number; maxPositions: number; dryRun: boolean;
     adaptive: boolean; binding: string;
   } {
-    const r = this.#cfg.risk;
+    const r = effectiveRisk(this.#db, this.#cfg);
     return {
       windowHours: 24,
       launches: this.launchesLast24h(), maxLaunches: this.effectiveMaxLaunchesPerDay,

@@ -24,6 +24,7 @@ import { loadWallet, publishWalletAddress } from "../chain/wallet.ts";
 import { openPosition } from "../positions/store.ts";
 import { evaluateOpenPositions } from "../positions/manager.ts";
 import { kvGet, kvSet } from "../util/db.ts";
+import { effectiveScoring } from "../risk/experimentalWindow.ts";
 import { log, errFields } from "../util/log.ts";
 import { sleep } from "../util/http.ts";
 import { consumeCommands } from "../web/commands.ts";
@@ -193,14 +194,21 @@ export async function launchTick(
   const rawSignals = results.flatMap((r) => r.signals);
   const phraseCount = ingestSignals(db, rawSignals, weights, cfg.scoring);
 
-  const candidates = buildCandidates(db, cfg.scoring);
+  // Reads through the 24h experimental window (src/risk/experimentalWindow.ts)
+  // when one is active; otherwise identical to cfg.scoring. Every downstream
+  // gate in this function (buildCandidates/checkWarmup/qualifying) reads this
+  // value, not cfg.scoring, so the window and the base config never disagree
+  // mid-tick.
+  const scoring = effectiveScoring(db, cfg);
+
+  const candidates = buildCandidates(db, scoring);
   stats.candidates = candidates.length;
 
   const funnel: Funnel = {
     sniffed: rawSignals.length,
     phrases: phraseCount,
     terms: candidates.length,
-    warm: candidates.filter((c) => c.observations >= cfg.scoring.minObservations).length,
+    warm: candidates.filter((c) => c.observations >= scoring.minObservations).length,
     scored: 0, examined: 0, clean: 0, uncrowded: 0, affordable: 0, launched: 0,
   };
 
@@ -210,20 +218,20 @@ export async function launchTick(
     return stats;
   }
 
-  const warm = checkWarmup(db, cfg.scoring);
+  const warm = checkWarmup(db, scoring);
   if (!warm.warm) {
     log.info("warming up", { spanMinutes: warm.spanMinutes.toFixed(1), reason: warm.reason });
     recordFunnel(db, cfg, funnel);
     return stats;
   }
 
-  const passing = qualifying(candidates, cfg.scoring);
+  const passing = qualifying(candidates, scoring);
   stats.qualified = passing.length;
   funnel.scored = passing.length;
   if (!passing.length) {
     recordFunnel(db, cfg, funnel);
     log.debug("no candidate cleared the threshold", {
-      candidates: candidates.length, threshold: cfg.scoring.threshold,
+      candidates: candidates.length, threshold: scoring.threshold,
       best: candidates[0]?.score.toFixed(1),
     });
     return stats;
