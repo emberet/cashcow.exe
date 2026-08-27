@@ -42,7 +42,7 @@ const ASCII_TERMS = [
 ];
 
 const SLOP_TERMS = [
-  "whitehouse", "potus", "president", "presidential", "oval",
+  "whitehouse", "white house", "potus", "president", "presidential", "oval",
   "senate", "senator", "congress", "congressional", "capitol",
   "governor", "mayor", "cabinet", "secretary", "administration",
   "election", "elections", "campaign", "ballot", "primary", "caucus",

@@ -197,8 +197,8 @@ export function recentLaunches(db: Db, cfg: Config, limit = 24) {
     // the mint's token page when there's no signature yet (pretend-mode
     // launches never get one), so "peek" never dead-ends on solscan.io.
     url: r.signature
-      ? `https://solscan.io/tx/${String(r.signature)}`
-      : `https://solscan.io/token/${String(r.mint)}`,
+      ? `https://solscan.io/tx/${String(r.signature)}${cfg.network !== "mainnet-beta" ? `?cluster=${cfg.network}` : ""}`
+      : `https://solscan.io/token/${String(r.mint)}${cfg.network !== "mainnet-beta" ? `?cluster=${cfg.network}` : ""}`,
   }));
 }
 

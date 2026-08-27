@@ -504,7 +504,7 @@ async function main() {
       break;
 
     case "boost-window": {
-      if (flags.get("status") === true) {
+      if (flags.has("status")) {
         const w = getExperimentalWindow(db);
         if (!w) {
           console.log("\n  no experimental window active -- standard limits in effect\n");
@@ -522,7 +522,7 @@ async function main() {
         break;
       }
 
-      if (flags.get("clear") === true) {
+      if (flags.has("clear")) {
         clearExperimentalWindow(db, positional.join(" ") || "manual clear via CLI");
         console.log("\n  cleared -- standard limits in effect immediately\n");
         break;

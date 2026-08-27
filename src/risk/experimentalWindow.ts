@@ -14,10 +14,10 @@ import { log } from "../util/log.ts";
  * running `boost-window` on the CLI, not the learning loop), and it can never
  * reach anything the tuner can't already reach for scoring, nor anything
  * beyond `EXPERIMENTAL_CEILINGS` for risk. It can widen how many launches
- * happen; it can never raise the hard static ceilings in `config.json` --
- * every value here is clamped below them at read time, and defense-in-depth
- * clamped again against `EXPERIMENTAL_CEILINGS` even if the stored row were
- * hand-edited.
+ * happen. Values are capped by `EXPERIMENTAL_CEILINGS`, and
+ * `setExperimentalWindow` never lowers a value below the supplied base.
+ * Defense-in-depth clamping against `EXPERIMENTAL_CEILINGS` happens again at
+ * read time even if the stored row were hand-edited.
  *
  * Fail-closed by construction: anything missing, malformed, expired, or
  * out-of-ceiling resolves to the ordinary static config, never to something

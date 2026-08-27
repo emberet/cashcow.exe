@@ -335,7 +335,10 @@ export const feedsSchema = z.object({
     /** Reuses classify.ts's washSuspicionScore (txCount/replies) as a hard
      *  dampener; above this the signal is zeroed regardless of buy share. */
     maxWashSuspicionScore: z.number().positive().default(5),
-  }).default({}),
+  }).refine(
+    (data) => data.minBuyShareForSignal <= data.maxBuyShareForSignal,
+    { message: "minBuyShareForSignal must be <= maxBuyShareForSignal" },
+  ).default({}),
 }).default({});
 
 export const filtersSchema = z.object({
