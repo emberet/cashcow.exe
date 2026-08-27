@@ -22,6 +22,11 @@ type DexResponse = { pairs?: DexPair[] | null };
 export type DexActivity = {
   volumeH24: number;
   txCount24h: number;
+  /** Kept SEPARATE from `txCount24h`, not just summed into it: the wash
+   *  heuristic wants the total, but the buy/sell balance gate wants the split,
+   *  and once summed the split is unrecoverable. */
+  buys24h: number;
+  sells24h: number;
   liquidityUsd: number;
   pairUrl?: string;
 };
@@ -36,9 +41,14 @@ export async function fetchDexActivity(mint: string): Promise<DexActivity | null
   const best = solPairs.reduce((a, b) =>
     (b.liquidity?.usd ?? 0) > (a.liquidity?.usd ?? 0) ? b : a);
 
+  const buys24h = best.txns?.h24?.buys ?? 0;
+  const sells24h = best.txns?.h24?.sells ?? 0;
+
   return {
     volumeH24: best.volume?.h24 ?? 0,
-    txCount24h: (best.txns?.h24?.buys ?? 0) + (best.txns?.h24?.sells ?? 0),
+    txCount24h: buys24h + sells24h,
+    buys24h,
+    sells24h,
     liquidityUsd: best.liquidity?.usd ?? 0,
     pairUrl: best.url,
   };

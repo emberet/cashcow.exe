@@ -6,13 +6,14 @@ import { PROJECT_ROOT } from "../config/load.ts";
 import { validate, type Change, type Verdict } from "../learning/guardrails.ts";
 import { samplePumpLaunches } from "./pumpSample.ts";
 import { fetchDexActivity } from "./volume.ts";
+import { fetchOgStatus, type OgStatus } from "./ogCheck.ts";
 import { fetchHolderConcentration } from "../chain/holders.ts";
 import { redactEndpoint } from "../chain/rpc.ts";
 import { log } from "../util/log.ts";
 import { sleep } from "../util/http.ts";
 import { findHnPrecursors, findWikipediaPrecursors, type TrendMatch } from "./trendReconstruct.ts";
 import {
-  classifyLaunch, washSuspicionScore, percentileRank,
+  classifyLaunch, washSuspicionScore, percentileRank, buySharePct,
   DEFAULT_THRESHOLDS, type ClassifyThresholds,
 } from "./classify.ts";
 
@@ -59,7 +60,8 @@ type Enriched = {
   mint: string; name: string; symbol: string; createdTimestamp: number;
   athMarketCapUsd: number; replyCount: number; isBanned: boolean; graduated: boolean;
   top10ConcentrationPct: number | null;
-  txCount24h: number; volumeH24: number; pairUrl?: string;
+  txCount24h: number; buys24h: number; sells24h: number;
+  volumeH24: number; pairUrl?: string;
 };
 
 async function mapWithConcurrency<T, R>(
@@ -82,7 +84,7 @@ const PUBLIC_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
 
 /**
  * pump.fun's public listing API returns MAINNET launches -- that's where real
- * $500k-$2M volume happens, devnet has nothing comparable. So holder reads
+ * $500k+/24h volume happens, devnet has nothing comparable. So holder reads
  * must hit mainnet regardless of what `cfg.network`/`cfg.rpc.primary` are set
  * to for the bot's own live/dry-run mode; reusing the bot's own (possibly
  * devnet) connection would silently fail every lookup against these mints.
@@ -206,6 +208,8 @@ export async function runBacktest(
       isBanned: c.isBanned, graduated: c.graduated,
       top10ConcentrationPct: concentrationByMint.get(c.mint) ?? null,
       txCount24h: activity?.txCount24h ?? 0,
+      buys24h: activity?.buys24h ?? 0,
+      sells24h: activity?.sells24h ?? 0,
       volumeH24: activity?.volumeH24 ?? 0,
       pairUrl: activity?.pairUrl,
     };
@@ -215,18 +219,50 @@ export async function runBacktest(
   // distribution, not a fixed assumption about what a normal ratio looks like.
   const washScores = enriched.map((e) => washSuspicionScore(e.txCount24h, e.replyCount));
 
-  const classified = enriched.map((e, i) => {
-    const percentile = percentileRank(washScores[i]!, washScores);
-    const result = classifyLaunch({
-      isBanned: e.isBanned,
-      athMarketCapUsd: e.athMarketCapUsd,
-      top10ConcentrationPct: e.top10ConcentrationPct, // null (RPC failed) does not disqualify -- see classify.ts
-      txCount24h: e.txCount24h,
-      replyCount: e.replyCount,
-      washSuspicionPercentile: percentile,
-    }, opts.thresholds);
-    return { ...e, washSuspicionPercentile: percentile, ...result };
+  const inputFor = (e: Enriched, percentile: number, ogStatus: OgStatus) => ({
+    isBanned: e.isBanned,
+    volume24hUsd: e.volumeH24,
+    athMarketCapUsd: e.athMarketCapUsd,
+    top10ConcentrationPct: e.top10ConcentrationPct, // null (RPC failed) does not disqualify -- see classify.ts
+    txCount24h: e.txCount24h,
+    buys24h: e.buys24h,
+    sells24h: e.sells24h,
+    replyCount: e.replyCount,
+    washSuspicionPercentile: percentile,
+    ogStatus,
   });
+
+  const percentiles = enriched.map((_, i) => percentileRank(washScores[i]!, washScores));
+
+  // Two passes on purpose. The OG check is one pump.fun request per coin, so
+  // it runs ONLY on candidates that already survived every free gate -- the
+  // same "everything that can reject for free runs first" ordering the live
+  // pipeline uses. A coin already rejected for volume does not need a lookup
+  // to also be told it is a clone.
+  const provisional = enriched.map((e, i) =>
+    classifyLaunch(inputFor(e, percentiles[i]!, { kind: "skipped" }), opts.thresholds));
+
+  const needOgCheck = enriched.filter((_, i) => provisional[i]!.clean);
+  console.log(`  checking OG-vs-copycat for the ${needOgCheck.length} candidate(s) that passed ` +
+    `every other gate (pump.fun ticker search, oldest-first)...`);
+
+  const ogByMint = new Map<string, OgStatus>();
+  await mapWithConcurrency(needOgCheck, opts.concurrency, async (e) => {
+    ogByMint.set(e.mint, await fetchOgStatus(e.symbol, e.mint, e.createdTimestamp)
+      .catch((err) => ({ kind: "unknown", why: String(err).slice(0, 120) }) as OgStatus));
+  });
+
+  const classified = enriched.map((e, i) => {
+    const ogStatus = ogByMint.get(e.mint) ?? { kind: "skipped" as const };
+    const result = classifyLaunch(inputFor(e, percentiles[i]!, ogStatus), opts.thresholds);
+    return { ...e, washSuspicionPercentile: percentiles[i]!, ogStatus, ...result };
+  });
+
+  const copycats = classified.filter((c) => c.ogStatus.kind === "copycat").length;
+  if (copycats > 0) {
+    console.log(`  ${copycats}/${needOgCheck.length} of those turned out to be copycats riding an ` +
+      `earlier mint's ticker, and were dropped`);
+  }
 
   const survivors = classified.filter((c) => c.clean);
   console.log(`  classified: ${survivors.length}/${classified.length} as "clean" by the thresholds below\n`);
@@ -307,8 +343,10 @@ export async function runBacktest(
 function renderReport(a: {
   opts: BacktestOpts;
   sample: { pagesScanned: number; coinsSeen: number; coins: unknown[] };
-  classified: Array<ReturnType<typeof classifyLaunch> & Enriched & { washSuspicionPercentile: number }>;
-  survivors: Array<Enriched & { washSuspicionPercentile: number; reasons: string[]; caveats: string[] }>;
+  classified: Array<ReturnType<typeof classifyLaunch> & Enriched & {
+    washSuspicionPercentile: number; ogStatus: OgStatus }>;
+  survivors: Array<Enriched & {
+    washSuspicionPercentile: number; ogStatus: OgStatus; reasons: string[]; caveats: string[] }>;
   precursors: Array<{ mint: string; matches: TrendMatch[] }>;
   proposals: Array<{ change: Change; verdict: Extract<Verdict, { ok: true }> }>;
   rpcFailed: number;
@@ -333,6 +371,11 @@ function renderReport(a: {
   } else {
     lines.push(`- holder concentration: collected for all ${a.sample.coins.length} candidates`);
   }
+  const ogChecked = a.classified.filter((c) => c.ogStatus.kind !== "skipped");
+  const ogCopycats = a.classified.filter((c) => c.ogStatus.kind === "copycat").length;
+  lines.push(`- OG-vs-copycat checked: ${ogChecked.length} (only candidates that passed every ` +
+    `other gate -- the check costs a request each, so it runs last)`);
+  lines.push(`- of those, dropped as copycats riding an earlier mint's ticker: ${ogCopycats}`);
   lines.push(`- classified clean: ${a.classified.filter((c) => c.clean).length} / ${a.classified.length}`);
   lines.push(`- had a reconstructable precursor: ${a.precursors.filter((p) => p.matches.length).length}`);
   lines.push("");
@@ -376,8 +419,14 @@ function renderReport(a: {
   lines.push("");
   for (const s of a.survivors) {
     const matches = a.precursors.find((p) => p.mint === s.mint)?.matches ?? [];
+    const share = buySharePct(s.buys24h, s.sells24h);
     lines.push(`### ${s.name} (${s.symbol}) -- \`${s.mint}\``);
-    lines.push(`- ATH mcap: $${Math.round(s.athMarketCapUsd).toLocaleString()}`);
+    lines.push(`- 24h volume: $${Math.round(s.volumeH24).toLocaleString()}`);
+    lines.push(`- 24h buy/sell: ${share === null ? "no trades" :
+      `${share.toFixed(1)}/${(100 - share).toFixed(1)} (${s.buys24h} buys, ${s.sells24h} sells)`}`);
+    lines.push(`- OG for its ticker: ${s.ogStatus.kind === "og" ? "yes, no earlier mint shares it" :
+      s.ogStatus.kind === "unknown" ? `UNVERIFIED -- ${s.ogStatus.why}` : s.ogStatus.kind}`);
+    lines.push(`- ATH mcap: $${Math.round(s.athMarketCapUsd).toLocaleString()} (context only, not a gate)`);
     lines.push(`- top-10 concentration: ${s.top10ConcentrationPct?.toFixed(1) ?? "unknown"}%`);
     lines.push(`- 24h txns: ${s.txCount24h}, replies: ${s.replyCount}`);
     lines.push(`- DexScreener: ${s.pairUrl ?? "(no pair found)"}`);
