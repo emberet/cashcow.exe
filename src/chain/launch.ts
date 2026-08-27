@@ -14,7 +14,9 @@ import {
 const MAX_TX_BYTES = 1232;
 import BN from "bn.js";
 import type { Config } from "../config/schema.ts";
-import { getConnection, computeBudgetIxs, solToLamports, maxPriorityFeeCostSol } from "./rpc.ts";
+import {
+  getConnection, computeBudgetIxs, solToLamports, maxPriorityFeeCostSol, withBalanceLock,
+} from "./rpc.ts";
 import { loadWallet } from "./wallet.ts";
 import { log } from "../util/log.ts";
 
@@ -37,6 +39,12 @@ export type LaunchRequest = {
   /** Dev buy size in SOL. Zero launches with no dev position at all. */
   devBuySol: number;
   slippagePct: number;
+  /**
+   * Pre-generated mint keypair (e.g. vanity-ground by `grindMintKeypair`).
+   * Falls back to a fresh random keypair when omitted -- every existing
+   * caller leaves this unset, so behaviour is unchanged for them.
+   */
+  mintKeypair?: Keypair;
 };
 
 export type LaunchResult = {
@@ -70,7 +78,7 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
   // feeds, scoring, filters, saturation, naming and metadata. The chain path is
   // proven separately against a local validator running the cloned program.
   if (cfg.dryRun) {
-    const mintKp = Keypair.generate();
+    const mintKp = req.mintKeypair ?? Keypair.generate();
     log.info("DRY RUN launch (no transaction, no chain state read)", {
       mint: mintKp.publicKey.toBase58(),
       name: req.name, symbol: req.symbol, uri: req.uri,
@@ -89,7 +97,7 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
   const sdk = new PumpSdk();
   const online = new OnlinePumpSdk(conn);
 
-  const mintKp = Keypair.generate();
+  const mintKp = req.mintKeypair ?? Keypair.generate();
   const mint = mintKp.publicKey;
 
   // Price the dev buy against a fresh curve: the token does not exist yet, so
@@ -145,7 +153,6 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
   ];
 
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash(cfg.rpc.commitment);
-  const balanceBefore = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
   const tx = new VersionedTransaction(
     new TransactionMessage({
       payerKey: wallet.publicKey,
@@ -194,16 +201,24 @@ export async function launchToken(cfg: Config, req: LaunchRequest): Promise<Laun
     };
   }
 
-  const signature = await conn.sendTransaction(tx, {
-    skipPreflight: false,
-    maxRetries: 3,
+  // The balance snapshots must bracket nothing but this transaction. Holding
+  // the lock across send+confirm keeps a concurrent fee claim or position
+  // sell -- which run on the independent position-exit poll -- from landing
+  // inside this window and corrupting the measured cost.
+  const { balanceBefore, signature, balanceAfter } = await withBalanceLock(async () => {
+    const before = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
+    const sig = await conn.sendTransaction(tx, {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+    await conn.confirmTransaction(
+      { signature: sig, blockhash, lastValidBlockHeight },
+      cfg.rpc.commitment,
+    );
+    const after = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
+    return { balanceBefore: before, signature: sig, balanceAfter: after };
   });
-  await conn.confirmTransaction(
-    { signature, blockhash, lastValidBlockHeight },
-    cfg.rpc.commitment,
-  );
 
-  const balanceAfter = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
   const actualCostSol = (balanceBefore - balanceAfter) / 1e9;
 
   log.info("token launched", {

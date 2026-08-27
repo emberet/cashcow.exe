@@ -1,7 +1,7 @@
 import { TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { OnlinePumpSdk } from "@pump-fun/pump-sdk";
 import type { Config } from "../config/schema.ts";
-import { getConnection, computeBudgetIxs, lamportsToSol } from "./rpc.ts";
+import { getConnection, computeBudgetIxs, lamportsToSol, withBalanceLock } from "./rpc.ts";
 import { loadWallet } from "./wallet.ts";
 import { log } from "../util/log.ts";
 
@@ -64,10 +64,16 @@ export async function claimCreatorFees(cfg: Config): Promise<ClaimResult> {
   );
   tx.sign([wallet]);
 
-  const before = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
-  const signature = await conn.sendTransaction(tx, { skipPreflight: false, maxRetries: 3 });
-  await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, cfg.rpc.commitment);
-  const after = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
+  // See chain/rpc.ts withBalanceLock: this window must not overlap a launch's
+  // or a sell's own before/after snapshots, or the claim gets folded into
+  // whichever one is mid-flight.
+  const { before, signature, after } = await withBalanceLock(async () => {
+    const b = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
+    const sig = await conn.sendTransaction(tx, { skipPreflight: false, maxRetries: 3 });
+    await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, cfg.rpc.commitment);
+    const a = await conn.getBalance(wallet.publicKey, cfg.rpc.commitment);
+    return { before: b, signature: sig, after: a };
+  });
 
   const claimedSol = lamportsToSol(after - before);
   log.info("creator fees claimed", { claimedSol, signature });

@@ -99,3 +99,23 @@ export function maxPriorityFeeCostSol(cfg: Config): number {
 export function __resetConnection(): void {
   conn = undefined;
 }
+
+/**
+ * Serializes every operation that measures a wallet SOL delta around a
+ * transaction: launch (chain/launch.ts), fee claim (chain/fees.ts) and sell
+ * (chain/trade.ts) each read the balance, send+confirm a transaction, then
+ * read the balance again. Those three run on two independent schedulers --
+ * the slow launch loop and the fast position-exit poll -- and each spends
+ * several seconds inside `confirmTransaction`. Left unserialized, one
+ * operation's "before" or "after" read can land while another's transaction
+ * is still in flight, folding an unrelated inflow or outflow into the
+ * measured delta. A creator-fee claim landing inside a launch's snapshot
+ * window once made a real ~0.025 SOL launch cost measure as 0.
+ */
+let balanceLock: Promise<void> = Promise.resolve();
+
+export function withBalanceLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = balanceLock.then(fn);
+  balanceLock = run.then(() => undefined, () => undefined);
+  return run;
+}
