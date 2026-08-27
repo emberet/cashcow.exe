@@ -76,7 +76,7 @@ understanding what it was protecting against.
 ## Commands
 
 ```bash
-npm test                       # 249 tests — run before every commit
+npm test                       # 272 tests — run before every commit
 npx tsc --noEmit               # typecheck (no build step; Node strips types)
 
 npm run preflight              # verify every credential BY USING IT; nothing is signed
@@ -234,8 +234,60 @@ generated identity, because the ticker does not exist until the model has run.
   `min(capacity, effectiveRisk)`, so leaving capacity on the un-windowed
   static value would have silently defeated the window whenever adaptive
   capacity is off (the default).
+- **"More volume" is a discovery-quality problem, not a trading problem —
+  `src/feeds/onchain.ts`'s `curveProgress()` and `src/feeds/dexActivity.ts`
+  are gmgn.ai-inspired, both scoring-layer only.** gmgn.ai (a multi-chain meme
+  trading terminal) surfaces trending/"almost bonded" tokens and smart-money
+  wallet flow; it has no documented free public API, so neither signal calls
+  it — both are reimplemented against data already fetched from pump.fun's
+  own frontend API and DexScreener's per-token endpoint
+  (`src/research/volume.ts`'s `fetchDexActivity`, previously backtest-only).
+  `curveProgress()` is an *estimate* (`usd_market_cap / graduationMarketCapUsd`)
+  because true bonding-curve reserves need a per-mint RPC read, and the
+  closest existing analog (`src/chain/holders.ts`) fails against the free
+  public mainnet RPC almost every time — see `test/research.test.ts`.
+  `dexActivity`'s `organicBuyPressure()` (`src/scoring/organicFlow.ts`) is
+  **deliberately bounded, not monotonic**: a lopsided buy/sell split is the
+  documented fingerprint of an untested pump *or* a wash-trading bot in
+  `src/research/classify.ts`'s own `DEFAULT_THRESHOLDS`, so a near-100% buy
+  share scores 0, not higher — reusing `washSuspicionScore()` as a hard
+  dampener rather than rewarding the pattern the bot's own research code
+  already distrusts. The dampener only applies when `replyCount > 0`:
+  verified live (2026-08-27) that pump.fun's `reply_count` is chat activity
+  on the coin's OWN pump.fun page, which reads 0 for essentially every
+  token once trading has migrated to a DEX — a real coin with $1.4M in 24h
+  DexScreener liquidity and 43k real transactions showed `reply_count: 0`.
+  Treating that as infinite wash suspicion zeroed out nearly every genuine
+  post-migration candidate, not just wash-shaped ones, so `replyCount === 0`
+  is treated as UNKNOWN, same idiom as `classify.ts`'s
+  `top10ConcentrationPct === null`. `dexActivity` ships `enabled: false` (new fan-out
+  pattern — up to `maxCandidatesPerPoll` DexScreener calls per poll, not
+  one) and both feeds share `onchain`'s `crypto` family
+  (`src/scoring/independence.ts`) rather than inventing a new one, since both
+  read the same underlying pump.fun population. Neither signal touches
+  `qualifying()`, filters, self-dedupe, or saturation — see `docs/DECISIONS.md`
+  §2 for why wash trading, multi-wallet bundling, and shilling are explicitly
+  excluded from this codebase and always will be.
 
 ---
+
+- **`docs/self-improvement.md` is generated and gitignored — `tuning_runs`
+  (SQL) is the real audit trail.** `src/learning/selfImprovementLog.ts`'s
+  `appendSelfImprovementEntry()` is called from every `runTuning()` path
+  except the disabled one (`src/learning/tuner.ts`), including the "not
+  enough evidence yet" cycles, so a human can watch the trend in one
+  readable file instead of querying the DB. It writes nothing at all while
+  `learning.enabled` is false. This is not a new tunable surface — the set
+  of things the tuner can touch is still exactly `guardrails.ts`'s
+  `TUNABLE` allowlist, unchanged. To opt into a faster, fully-autonomous
+  cadence, set in your own `config.json` (never `default.config.json`,
+  which keeps its off-by-default posture): `"learning": { "enabled": true,
+  "intervalHours": 3, "autoApply": true }` — `minSampleSize`,
+  `maxChangesPerRun`, and every guardrails bound stay at their existing
+  values, so this only runs the same already-bounded decision more often,
+  it does not make any single decision bigger. The log file is capped at
+  the 500 most recent entries (oldest trimmed, header always kept) so it
+  can't grow unbounded on a long-running bot.
 
 ## Expectations for changes
 
