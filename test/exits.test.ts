@@ -373,6 +373,36 @@ describe("phrase extraction — makes cross-feed corroboration possible", () => 
     assert.equal(extractPhrases("").length, 0);
     assert.equal(extractPhrases("   ").length, 0);
   });
+
+  // A real mainnet launch once minted "you girl" (YOUGIRL) -- both words are
+  // individually listed in NEVER_ALONE as unable to stand alone, but the
+  // all-filler check only ran for single-token phrases, so the pair sailed
+  // through. These pin the fix: a phrase built entirely out of NEVER_ALONE
+  // words is rejected regardless of how many of them there are.
+  test("a phrase built entirely of filler/pronoun words is rejected, not just a lone one", () => {
+    assert.equal(extractPhrases("you girl").length, 0);
+  });
+
+  test("the bigram-fallback path also rejects an all-filler pair, not just the whole-text path", () => {
+    // Five words, all pronouns/determiners in NEVER_ALONE, all lowercase (so
+    // PROPER_RUN never matches) -- every bigram AND the final 3-word fallback
+    // the bigram-of-last-resort logic tries are pure filler.
+    assert.equal(extractPhrases("you your her their its").length, 0);
+  });
+
+  test("a genuine two-word subject is unaffected by the filler check", () => {
+    const p = extractPhrases("Crypto Market");
+    assert.equal(p.length, 1);
+    assert.equal(p[0]?.text, "Crypto Market");
+  });
+
+  test("a phrase with only ONE filler word among several still passes (needs one real subject, not zero filler)", () => {
+    // "dgaf" and "anymore" are not filler, so this stays a valid whole-text
+    // term -- confirms the fix doesn't over-reject a term already live.
+    const p = extractPhrases("i dgaf anymore");
+    assert.equal(p.length, 1);
+    assert.equal(p[0]?.text, "i dgaf anymore");
+  });
 });
 
 describe("affinity — separates trends with buyers from trends without", () => {

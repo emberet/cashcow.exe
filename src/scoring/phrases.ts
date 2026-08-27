@@ -23,7 +23,7 @@ const MAX_WHOLE_WORDS = 4;
  */
 const NEVER_ALONE = new Set([
   // pronouns / determiners / sentence openers
-  "my", "your", "his", "her", "their", "our", "its", "this", "that", "these",
+  "my", "your", "his", "her", "their", "our", "its", "mine", "this", "that", "these",
   "those", "what", "when", "where", "who", "whom", "why", "how", "which",
   "there", "here", "then", "than", "some", "any", "all", "every", "each",
   "you", "we", "they", "he", "she", "it", "me", "us", "them", "i",
@@ -60,6 +60,16 @@ const NOISE = new Set([
   "why", "what", "when", "where", "who", "how", "does", "did", "can", "should",
   "would", "could", "about", "after", "before", "over", "under", "into", "out",
 ]);
+
+/**
+ * A phrase built entirely out of `NEVER_ALONE` words is not a subject just
+ * because there happen to be two of them stuck together -- "you girl" is as
+ * empty as "you" or "girl" alone. Caught two words too late once already: a
+ * real mainnet launch minted "you girl" (`YOUGIRL`) before this existed.
+ */
+function isAllFiller(toks: string[]): boolean {
+  return toks.length > 0 && toks.every((t) => NEVER_ALONE.has(t));
+}
 
 export type Phrase = {
   text: string;
@@ -100,6 +110,8 @@ export function extractPhrases(text: string, limit = 4): Phrase[] {
     if (toks.length === 1) {
       const only = toks[0]!;
       if (only.length < 3 || NEVER_ALONE.has(only)) return [];
+    } else if (isAllFiller(toks)) {
+      return [];
     }
     const key = contentKey(trimmed);
     return key ? [{ text: trimmed, key, salience: 1 }] : [];
@@ -116,6 +128,8 @@ export function extractPhrases(text: string, limit = 4): Phrase[] {
     if (toks.length === 1) {
       const only = toks[0]!;
       if (only.length < 3 || NEVER_ALONE.has(only)) return;
+    } else if (isAllFiller(toks)) {
+      return;
     }
 
     const key = toks.slice().sort().join(" ");

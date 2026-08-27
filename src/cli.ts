@@ -320,7 +320,8 @@ async function main() {
       console.log("  score  reason                    term");
       console.log("  " + "-".repeat(70));
       for (const r of rows) {
-        console.log(`  ${r.score.toFixed(1).padStart(5)}  ${r.reason.slice(0, 24).padEnd(25)} ${r.term.slice(0, 35)}`);
+        const term = r.count > 1 ? `${r.term} (×${r.count})` : r.term;
+        console.log(`  ${r.score.toFixed(1).padStart(5)}  ${r.reason.slice(0, 24).padEnd(25)} ${term.slice(0, 35)}`);
       }
       console.log();
       break;

@@ -340,29 +340,76 @@ const DECLINE_LABEL: Record<string, { text: string; tone: string }> = {
 };
 
 /**
+ * Collapse repeat rows so one recurring term cannot fill every slot in a
+ * small display list.
+ *
+ * `checkSaturation`'s free self-dedupe check (src/scoring/saturation.ts)
+ * correctly re-declines an already-launched term every single tick, forever
+ * -- that is intentional and free, but a trending topic (or a term someone
+ * keeps posting about) can dominate the raw `declined` table with dozens of
+ * identical rows, crowding out everything else in an operator-facing list.
+ * `rows` must already be ordered newest first, so the first occurrence seen
+ * for a key is the one whose fields are kept.
+ */
+function collapseRepeats<T extends { ts: number }>(
+  rows: T[],
+  keyOf: (row: T) => string,
+  limit: number,
+): Array<T & { count: number }> {
+  const groups = new Map<string, T & { count: number }>();
+  for (const row of rows) {
+    const key = keyOf(row);
+    const existing = groups.get(key);
+    if (existing) existing.count++;
+    else groups.set(key, { ...row, count: 1 });
+  }
+  return [...groups.values()].slice(0, limit);
+}
+
+/** Appends a "(×N)" marker to a display note when a row stands in for more than one collapsed repeat. */
+function suffixCount(note: string, count: number): string {
+  return count > 1 ? `${note} (×${count})` : note;
+}
+
+/**
  * Recently declined candidates.
  *
  * `delayHours` exists because a live rejection feed still leaks what the bot is
  * looking at right now. Delayed, it becomes an honest record of judgement
  * rather than a tip sheet. Admin passes 0; the public page does not.
+ *
+ * Fetches a wider raw window than `limit` and collapses same-term-and-reason
+ * repeats (keyed on `norm`, the already-normalized column, not raw `term`
+ * text) before slicing, so `limit` distinct decisions are returned rather
+ * than `limit` rows that might all be the same decision repeated.
  */
 export function recentDeclines(db: Db, cfg: Config, delayHours: number, limit = 8) {
+  const fetchLimit = Math.min(limit * 8, 200);
   const rows = db.prepare(
-    `SELECT term, reason, detail, score, ts FROM declined
+    `SELECT term, norm, reason, detail, score, ts FROM declined
       WHERE dry_run = ? AND ts < ?
       ORDER BY ts DESC LIMIT ?`,
-  ).all(mode(cfg), Date.now() - delayHours * HOUR, limit) as Array<Record<string, unknown>>;
+  ).all(mode(cfg), Date.now() - delayHours * HOUR, fetchLimit) as Array<Record<string, unknown>>;
 
-  return rows.map((r) => {
-    const reason = String(r.reason);
-    const meta = DECLINE_LABEL[reason] ?? { text: reason.toUpperCase(), tone: "milk" };
+  const mapped = rows.map((r) => ({
+    term: String(r.term),
+    norm: String(r.norm ?? r.term),
+    reason: String(r.reason),
+    detail: String(r.detail ?? ""),
+    score: Number(r.score ?? 0),
+    ts: Number(r.ts),
+  }));
+
+  return collapseRepeats(mapped, (r) => `${r.norm}\u0000${r.reason}`, limit).map((r) => {
+    const meta = DECLINE_LABEL[r.reason] ?? { text: r.reason.toUpperCase(), tone: "milk" };
     return {
-      term: String(r.term),
+      term: r.term,
       reason: meta.text,
       tone: meta.tone,
-      detail: String(r.detail ?? ""),
-      score: Number(r.score ?? 0),
-      ts: Number(r.ts),
+      detail: r.detail,
+      score: r.score,
+      ts: r.ts,
+      count: r.count,
     };
   });
 }
@@ -537,20 +584,28 @@ function scoreHistogram(db: Db, cfg: Config) {
 }
 
 /** Competitor counts parsed out of the saturation reason we already stored. */
-function crowdedDetail(db: Db, cfg: Config, delayHours: number, limit = 10) {
+export function crowdedDetail(db: Db, cfg: Config, delayHours: number, limit = 10) {
+  const fetchLimit = Math.min(limit * 8, 200);
   const rows = db.prepare(
-    `SELECT term, detail, ts FROM declined
+    `SELECT term, norm, detail, ts FROM declined
       WHERE dry_run = ? AND reason = 'crowded' AND ts < ?
       ORDER BY ts DESC LIMIT ?`,
-  ).all(mode(cfg), Date.now() - delayHours * HOUR, limit) as Array<Record<string, unknown>>;
+  ).all(mode(cfg), Date.now() - delayHours * HOUR, fetchLimit) as Array<Record<string, unknown>>;
 
-  return rows.map((r) => {
-    const detail = String(r.detail ?? "");
-    const m = detail.match(/^(\d+) similar/);
+  const mapped = rows.map((r) => ({
+    term: String(r.term),
+    norm: String(r.norm ?? r.term),
+    detail: String(r.detail ?? ""),
+    ts: Number(r.ts),
+  }));
+
+  return collapseRepeats(mapped, (r) => r.norm, limit).map((r) => {
+    const m = r.detail.match(/^(\d+) similar/);
     return {
-      term: String(r.term),
+      term: r.term,
       rivals: m ? Number(m[1]) : null,
-      ts: Number(r.ts),
+      ts: r.ts,
+      count: r.count,
     };
   });
 }
@@ -646,7 +701,7 @@ export function gateDetails(db: Db, cfg: Config, delayHours: number) {
       rows: declines
         .filter((d) => contentReasons.has(d.reason))
         .slice(0, 10)
-        .map((d) => ({ term: d.term, note: d.reason, tone: d.tone })),
+        .map((d) => ({ term: d.term, note: suffixCount(d.reason, d.count), tone: d.tone })),
       delayed: true,
     },
     {
@@ -661,7 +716,7 @@ export function gateDetails(db: Db, cfg: Config, delayHours: number) {
       ],
       rows: crowdedDetail(db, cfg, delayHours).map((c) => ({
         term: c.term,
-        note: c.rivals != null ? `${c.rivals} rival coins` : "already minted",
+        note: suffixCount(c.rivals != null ? `${c.rivals} rival coins` : "already minted", c.count),
         tone: "pink",
       })),
       delayed: true,
@@ -680,7 +735,7 @@ export function gateDetails(db: Db, cfg: Config, delayHours: number) {
       rows: declines
         .filter((d) => d.reason === "ALLOWANCE GONE")
         .slice(0, 6)
-        .map((d) => ({ term: d.term, note: "allowance already spent", tone: "milk" })),
+        .map((d) => ({ term: d.term, note: suffixCount("allowance already spent", d.count), tone: "milk" })),
       delayed: true,
     },
     {
