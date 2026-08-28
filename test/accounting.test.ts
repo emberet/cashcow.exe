@@ -1,7 +1,8 @@
 import { test, describe, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { configSchema } from "../src/config/schema.ts";
+import { configSchema, isPretend } from "../src/config/schema.ts";
+import { claimSendsRealTransaction } from "../src/chain/fees.ts";
 import { openMemoryDb, type Db } from "../src/util/db.ts";
 import { profitSummary } from "../src/web/queries.ts";
 import { recordDistributionSnapshot, listDistributions } from "../src/accounting/distribution.ts";
@@ -80,6 +81,40 @@ describe("profitSummary — no double-counting", () => {
     const p = profitSummary(db, cfg());
     assert.equal(p.netProfitSol, 0);
   });
+});
+
+// ==================================================================
+// A fee claim must hit the chain under exactly the conditions that make it
+// book as LIVE, and never under the ones that book it as PRETEND.
+//
+// This was broken in production. claimCreatorFees() gated the real
+// transaction on `cfg.dryRun` alone while runner/loop.ts booked the row with
+// `isPretend()` (= dryRun || launch.simulate). With simulate=true and
+// dryRun=false the bot sent a REAL claim and recorded it against the pretend
+// ledger: 0.642662095 SOL genuinely landed in the wallet on 2026-08-27
+// (signature 5MbmC35h..., confirmed on-chain) but `profit` reported 0 fees
+// and understated net profit by that amount.
+// ==================================================================
+
+describe("fee claiming - the send gate matches the accounting gate", () => {
+  const combos = [
+    { dryRun: false, simulate: false, sends: true },
+    { dryRun: true,  simulate: false, sends: false },
+    // The case that actually broke: live wallet, simulate on.
+    { dryRun: false, simulate: true,  sends: false },
+    { dryRun: true,  simulate: true,  sends: false },
+  ];
+
+  for (const { dryRun, simulate, sends } of combos) {
+    test(`dryRun=${dryRun} simulate=${simulate} -> ${sends ? "sends" : "does not send"}`, () => {
+      const c = configSchema.parse({ dryRun, launch: { simulate } });
+      assert.equal(claimSendsRealTransaction(c), sends);
+      // The load-bearing assertion: a claim is sent if and only if the row
+      // would be booked live. If these two ever disagree again, real money
+      // goes missing from the accounts.
+      assert.equal(claimSendsRealTransaction(c), !isPretend(c));
+    });
+  }
 });
 
 // ==================================================================
