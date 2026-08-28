@@ -207,6 +207,9 @@ function render(d) {
   $("launches").innerHTML = (d.launches || []).length
     ? d.launches.map(launchRow).join("")
     : `<div class="card empty">No coins yet. It only burps when a trend clears every gate.</div>`;
+  // Re-wired on every push: innerHTML replaces the nodes, taking their
+  // listeners with them.
+  wireCopyButtons($("launches"));
 
   // --- declines
   delayMinutes = d.declineDelayMinutes ?? 5;
@@ -279,15 +282,7 @@ function render(d) {
         </span>
       </div>`;
 
-    ptCard.querySelectorAll("[data-copy]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(btn.dataset.copy);
-          btn.textContent = "COPIED";
-          setTimeout(() => { btn.textContent = "COPY"; }, 1200);
-        } catch { /* clipboard blocked; the link still works */ }
-      });
-    });
+    wireCopyButtons(ptCard);
   } else {
     ptCard.hidden = true;
   }
@@ -316,18 +311,7 @@ function render(d) {
         <span class="tag ${w.network === "mainnet-beta" ? "pink" : "sky"}">${esc(w.network)}</span>
       </div>`;
 
-    purseCard.querySelectorAll("[data-copy]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(btn.dataset.copy);
-          const was = btn.textContent;
-          btn.textContent = "COPIED";
-          setTimeout(() => { btn.textContent = was; }, 1500);
-        } catch {
-          btn.textContent = "COPY FAILED";
-        }
-      });
-    });
+    wireCopyButtons(purseCard);
   } else {
     purseCard.hidden = true;
   }
@@ -355,6 +339,37 @@ function render(d) {
   document.body.classList.remove("stale");
 }
 
+/** First and last few characters of a mint, for a line that has to stay short. */
+function shortMint(mint) {
+  const m = String(mint || "");
+  return m.length > 14 ? `${m.slice(0, 5)}…${m.slice(-5)}` : m;
+}
+
+/**
+ * Wire every copy-to-clipboard button inside a container.
+ *
+ * The page's CSP is `script-src 'self'` with no inline handlers, so these
+ * have to be attached after each render. Shared rather than repeated per
+ * card: the launches list re-renders on every SSE push, and a per-card copy
+ * of this loop is how one of them ends up quietly out of step.
+ */
+function wireCopyButtons(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-copy]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const was = btn.textContent;
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        btn.textContent = "COPIED";
+        setTimeout(() => { btn.textContent = was; }, 1500);
+      } catch {
+        btn.textContent = "COPY FAILED";
+        setTimeout(() => { btn.textContent = was; }, 1500);
+      }
+    });
+  });
+}
+
 function launchRow(l) {
   const v = l.outcome && l.outcome.verdict !== "pending" ? l.outcome.verdict : null;
   const win = v === "hit";
@@ -370,7 +385,14 @@ function launchRow(l) {
 
   return `<div class="launch-row${win ? " win" : ""}">
     <span class="sym">${esc(l.symbol)}</span>
-    <span class="nm">${esc(l.name)}</span>
+    <span class="nm">
+      <span class="nm-title">${esc(l.name)}</span>
+      <span class="ca">
+        <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer"
+           class="ca-mint" title="${esc(l.mint)}">${esc(shortMint(l.mint))}</a>
+        <button class="sm ca-copy" data-copy="${esc(l.mint)}" title="Copy contract address">COPY</button>
+      </span>
+    </span>
     <span class="score${l.score >= 70 ? " hot" : ""}">${Math.round(l.score)}</span>
     <span class="grey hide-md" style="font-size:13.5px">${esc((l.feeds || []).join(", "))}</span>
     <span class="r ${win ? "deep" : ""}" style="font-family:var(--display);font-size:19px">${esc(peak)}</span>
