@@ -188,13 +188,22 @@ describe("renderTokenImage", () => {
 });
 
 describe("buildImagePrompt", () => {
-  test("includes the coin's name, symbol, and description", () => {
+  test("leads with the real-world trend as the subject, not the coin name", () => {
+    // The term is the actual thing; the coin name is a marketing rewrite of
+    // it. An image model given "MoonShot Cure" draws a rocket; given
+    // "cancer drug approval" it draws something recognisable.
     const prompt = buildImagePrompt(
-      identity({ name: "Trips", symbol: "TRIPS", description: "a trippy trend" }), "monogram",
+      identity({ name: "MoonShot Cure", description: "a hopeful little coin" }),
+      "monogram",
+      "cancer drug approval",
     );
-    assert.match(prompt, /Trips/);
-    assert.match(prompt, /TRIPS/);
-    assert.match(prompt, /trippy trend/);
+    assert.match(prompt, /depicting: cancer drug approval/);
+    assert.match(prompt, /hopeful little coin/);
+  });
+
+  test("falls back to the coin name when no trend term is supplied", () => {
+    const prompt = buildImagePrompt(identity({ name: "Trips" }), "monogram");
+    assert.match(prompt, /depicting: Trips/);
   });
 
   test("carries a distinct style phrase per theme", () => {
@@ -208,5 +217,40 @@ describe("buildImagePrompt", () => {
 
   test("explicitly asks for no embedded text -- baked-in text from an image model is unreliable", () => {
     assert.match(buildImagePrompt(identity(), "monogram"), /no text/i);
+  });
+
+  test("steers away from the flat-placeholder look that loses to real competitors", () => {
+    const prompt = buildImagePrompt(identity(), "monogram");
+    assert.match(prompt, /Do NOT produce a flat icon/);
+    assert.match(prompt, /concept art|film poster/);
+  });
+
+  // ==================================================================
+  // Regression: the provenance line must never reach the image model.
+  //
+  // Two independently-correct changes collided. Descriptions gained a
+  // provenance sentence ("Auto-launched from the trend X ... Score 71/100
+  // ... 2 independent families") for human readers, and image generation
+  // fed `identity.description` straight to the model as subject matter --
+  // so the model would have been asked to draw that sentence.
+  // ==================================================================
+  test("uses the creative description only, never the provenance suffix", () => {
+    const withProv = identity({
+      creativeDescription: "a trippy little coin",
+      description:
+        'a trippy little coin Auto-launched from the trend "Trips" detected on ' +
+        "fourchan + googleNews. Score 71/100 across 4 sightings; 2 independent families.",
+    });
+    const prompt = buildImagePrompt(withProv, "monogram", "Trips");
+    assert.match(prompt, /a trippy little coin/);
+    assert.ok(!/Auto-launched/.test(prompt), "provenance must not reach the image model");
+    assert.ok(!/Score 71\/100/.test(prompt), "score must not reach the image model");
+    assert.ok(!/independent families/.test(prompt));
+  });
+
+  test("still works for identities predating creativeDescription", () => {
+    const legacy = identity({ description: "an older coin" });
+    delete (legacy as { creativeDescription?: string }).creativeDescription;
+    assert.match(buildImagePrompt(legacy, "monogram", "thing"), /an older coin/);
   });
 });

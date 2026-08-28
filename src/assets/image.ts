@@ -10,16 +10,24 @@ import type { BudgetGuard } from "../risk/budget.ts";
 /**
  * Token artwork.
  *
- * Rendered locally from a template so the per-launch marginal cost is
- * effectively zero. Given the base rates -- most launches earn nothing --
- * paying an image-generation API on every candidate would reliably cost more
- * than the launches return. Swap `mode` to wire in a generator once launches
- * are actually earning and the spend is justified by data rather than hope.
+ * Two paths. When `assets.image.gemini.enabled`, the coin face is generated
+ * by an image model from the trend itself; on ANY failure it falls back to
+ * the local SVG templates below, which are also what runs when the generator
+ * is off. See docs/DECISIONS.md for why the original "never call a generator
+ * API" position was reversed.
  *
- * The palette is derived from the symbol, so a given ticker always renders the
- * same way and the output is reproducible from the database alone.
+ * Why the generator won that argument: sampling the highest-market-cap coins
+ * on pump.fun (2026-08-29) showed rendered scenes and ornate emblems, never a
+ * flat gradient with a wordmark. The local templates are honest fallbacks but
+ * they look like placeholders beside real competitors, and a coin face that
+ * looks auto-generated is a bad first impression on the one screen a
+ * prospective buyer actually sees.
  *
- * Three templates, chosen by `assets/theme.ts` from the trend text:
+ * The local palette is derived from the symbol, so a given ticker always
+ * renders the same way and that output stays reproducible from the database
+ * alone -- a property the generated path deliberately does not have.
+ *
+ * Three local templates, chosen by `assets/theme.ts` from the trend text:
  *   monogram  the original gradient wordmark, and the fallback for anything
  *             that does not clearly fit the other two
  *   ascii     terminal treatment for AI/compute trends, glyphs drawn from the
@@ -263,7 +271,7 @@ export async function renderTokenImage(
   const g = cfg.assets.image.gemini;
   if (g.enabled && budget) {
     try {
-      return await generateGeminiImage(cfg, identity, theme, budget);
+      return await generateGeminiImage(cfg, identity, theme, budget, term);
     } catch (e) {
       log.warn("gemini image generation failed, using local template", {
         term, err: String(e).slice(0, 160),
@@ -294,10 +302,32 @@ async function renderLocalTemplate(
   };
 }
 
+/**
+ * Art directions, chosen from what actually performs.
+ *
+ * Sampled the highest-market-cap coins on pump.fun (2026-08-29) and looked at
+ * their images: UOTF is a rendered scene of a figure at a desk surrounded by
+ * oil barrels, USMS is an ornate metallic government-style seal, FTFS is a
+ * cinematic skyline with a flag. Not one of them is a flat gradient with a
+ * wordmark -- which is exactly what this bot produced before, and reads as an
+ * obvious placeholder next to them.
+ *
+ * So each direction below describes a SCENE or an EMBLEM with weight and
+ * depth, never "a clean simple logo".
+ */
 const THEME_STYLE: Record<ArtTheme, string> = {
-  ascii: "retro computer terminal / ASCII art aesthetic, monochrome or green-on-black",
-  slop: "loud tabloid-style meme poster aesthetic, bold and garish",
-  monogram: "clean abstract gradient logo aesthetic, simple geometric shapes",
+  ascii:
+    "retro-futurist computer terminal aesthetic: CRT phosphor glow, deep black " +
+    "background, green and amber monochrome, circuitry and dense code motifs, " +
+    "volumetric light, the look of a 1980s mainframe room photographed in the dark",
+  slop:
+    "dramatic political-poster aesthetic: bold saturated colour, heroic low-angle " +
+    "composition, stormy sky, newsprint and propaganda-poster energy, cinematic " +
+    "rim lighting, the look of a blockbuster film poster",
+  monogram:
+    "ornate official emblem aesthetic: a weighty metallic seal or crest rendered " +
+    "in gold and deep enamel colour, symmetrical, embossed, sitting on a rich dark " +
+    "background, the gravitas of a national institution's coat of arms",
 };
 
 /**
@@ -306,12 +336,31 @@ const THEME_STYLE: Record<ArtTheme, string> = {
  * pump.fun's own UI, so there is nothing gained by risking a garbled word
  * inside the art itself.
  */
-export function buildImagePrompt(identity: TokenIdentity, theme: ArtTheme): string {
+export function buildImagePrompt(
+  identity: TokenIdentity, theme: ArtTheme, term = "",
+): string {
+  // The trend phrase is the real-world SUBJECT and leads the prompt; the coin
+  // name is a marketing rewrite of it and is only context.
+  //
+  // creativeDescription, never description: since provenance was added,
+  // `description` ends with "Auto-launched from the trend ... Score 71/100
+  // ... 2 independent families", and an image model handed that will try to
+  // draw the sentence. Falls back for identities built before the field
+  // existed.
+  const blurb = identity.creativeDescription ?? identity.description;
+  const subject = term.trim() || identity.name;
+
   return (
-    `Square profile picture / avatar artwork for a memecoin called ` +
-    `"${identity.name}" (ticker ${identity.symbol}). ${identity.description} ` +
-    `Style: ${THEME_STYLE[theme]}. No text, letters, numbers, or watermarks ` +
-    `anywhere in the image. No borders or frames.`
+    `A square 1:1 crypto token profile image depicting: ${subject}. ` +
+    `Context: ${blurb} ` +
+    `Art direction: ${THEME_STYLE[theme]}. ` +
+    `It must look like professional concept art or a film poster -- richly ` +
+    `detailed, dramatic lighting, strong depth and contrast, a single clear ` +
+    `focal subject that still reads at thumbnail size. ` +
+    `Do NOT produce a flat icon, a plain gradient, a minimalist logo, or an ` +
+    `empty background. ` +
+    `Absolutely no text, letters, numbers, words, signatures or watermarks ` +
+    `anywhere in the image, and no borders or frames.`
   );
 }
 
@@ -337,6 +386,7 @@ type GeminiResponse = {
  */
 async function generateGeminiImage(
   cfg: Config, identity: TokenIdentity, theme: ArtTheme, budget: BudgetGuard,
+  term = "",
 ): Promise<RenderedImage> {
   const g = cfg.assets.image.gemini;
   const apiKey = process.env[g.apiKeyEnv];
@@ -349,7 +399,7 @@ async function generateGeminiImage(
     );
   }
 
-  const prompt = buildImagePrompt(identity, theme);
+  const prompt = buildImagePrompt(identity, theme, term);
   const res = await httpFetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${g.model}:generateContent`,
     {
