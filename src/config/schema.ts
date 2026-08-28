@@ -108,6 +108,21 @@ export const devPositionSchema = z.object({
     /** Retries before flagging a position as stuck for manual attention. */
     maxSellAttempts: z.number().int().positive().default(5),
   }).default({}),
+  /**
+   * Mints this bot must NEVER sell, whatever the exit rules say.
+   *
+   * The exit loop only ever acts on rows in `positions`, so a token the bot
+   * did not open a position in is already out of reach -- but "not currently
+   * reachable" is not the same as "cannot happen". A hand-inserted row, an
+   * admin force-sell, or future code that opens a position would each be
+   * enough. This list is enforced inside `sellAll()` in chain/trade.ts, the
+   * single function every sale routes through, so it holds for the automated
+   * exits and the admin command alike.
+   *
+   * Intended for the project's own token, which is held deliberately rather
+   * than traded.
+   */
+  neverSellMints: z.array(z.string()).default([]),
 });
 
 export const scoringSchema = z.object({
