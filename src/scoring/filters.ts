@@ -115,6 +115,10 @@ const NOT_A_PERSON = new Set([
   "city", "united", "county", "state", "island", "park", "beach", "street",
   "water", "reserve", "energy", "power", "labs", "group", "corp", "inc",
   "the", "of", "and", "vs", "with", "for", "new", "old", "big", "little",
+  // "Extended Look" and "Middle East" both blocked as false positives on
+  // 2026-08-28 -- "Extended Look" was the only >65-scoring, 2-family
+  // corroborated candidate that day (npm run score), lost to this heuristic.
+  "extended", "look", "middle", "east",
 ]);
 
 /**

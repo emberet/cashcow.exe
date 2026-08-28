@@ -232,6 +232,15 @@ describe("filters — reject before anything costs money", () => {
     }
   });
 
+  test("person-name heuristic does not eat 'Extended Look' or 'Middle East'", () => {
+    // Both blocked as false positives on 2026-08-28 -- "Extended Look" was
+    // that day's only >65-scoring, 2-family-corroborated candidate, lost to
+    // this heuristic (npm run score).
+    for (const term of ["Extended Look", "Middle East"]) {
+      assert.equal(checkTerm(term, f).allowed, true, `expected "${term}" to pass`);
+    }
+  });
+
   test("person-name heuristic has a known, documented false-positive cost", () => {
     // "Moo Deng" is a hippo, not a person, but it is indistinguishable from a
     // surname pair. Blocking it is the accepted cost of the asymmetry: a missed
