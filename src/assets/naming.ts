@@ -88,7 +88,11 @@ export async function generateIdentity(
     try {
       const identity = await callClaude(cfg, candidate, apiKey);
       const check = checkAll([identity.name, identity.symbol, identity.description], f);
-      if (check.allowed) return identity;
+      // Provenance is appended AFTER the filter check on purpose: it is built
+      // from `candidate.term`, which already cleared checkTerm() upstream in
+      // runner/loop.ts, plus feed ids and numbers. Running the filters over it
+      // again would only risk rejecting an already-vetted term twice.
+      if (check.allowed) return withProvenance(identity, candidate, cfg);
       log.warn("generated identity rejected by filters, using fallback", {
         term: candidate.term,
         reason: check.reason,
@@ -102,7 +106,36 @@ export async function generateIdentity(
     log.debug("no naming API key set, using deterministic fallback", { env: a.apiKeyEnv });
   }
 
-  return fallbackIdentity(cfg, candidate);
+  return withProvenance(fallbackIdentity(cfg, candidate), candidate, cfg);
+}
+
+/**
+ * The one-line "why this coin exists" that gets published with the token.
+ *
+ * Every launch before this shipped a description that was either a model
+ * joke or the words "X trending on fourchan." -- neither of which tells a
+ * reader what real-world thing the coin refers to or why a bot thought it
+ * was worth minting. Exported for testing.
+ */
+export function provenanceLine(candidate: Candidate): string {
+  const sources = candidate.feeds.join(" + ");
+  return (
+    `Auto-launched from the trend "${candidate.term}" ` +
+    `detected on ${sources}. ` +
+    `Score ${Math.round(candidate.score)}/100 across ${candidate.observations} ` +
+    `sightings; ${candidate.corroborationNote}.`
+  );
+}
+
+/** Appends `provenanceLine()` to a description, bounded by config. */
+export function withProvenance(
+  identity: TokenIdentity, candidate: Candidate, cfg: Config,
+): TokenIdentity {
+  const a = cfg.assets.naming;
+  if (!a.includeProvenance) return identity;
+
+  const combined = `${identity.description} ${provenanceLine(candidate)}`.trim();
+  return { ...identity, description: combined.slice(0, a.maxTotalDescriptionLength) };
 }
 
 async function callClaude(

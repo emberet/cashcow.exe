@@ -457,6 +457,31 @@ export type WalletView = {
   network: string;
 };
 
+export type ProjectTokenView = {
+  mint: string;
+  pumpFunUrl: string;
+  solscanUrl: string;
+};
+
+/**
+ * The project's own token, if configured.
+ *
+ * Hardcoded URL templates around an operator-supplied mint, so invariant 11
+ * (safeHttpUrl on third-party URLs) does not apply -- there is no
+ * stranger-supplied URL here. The mint is still validated against Solana's
+ * base58 address shape so a malformed config value cannot produce a broken
+ * or misleading link.
+ */
+export function projectTokenView(cfg: Config): ProjectTokenView | null {
+  const mint = cfg.web.projectTokenMint.trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) return null;
+  return {
+    mint,
+    pumpFunUrl: `https://pump.fun/coin/${mint}`,
+    solscanUrl: `https://solscan.io/token/${mint}`,
+  };
+}
+
 /** Human names for the sources, so the page never shows a config key. */
 export const SOURCE_NAMES: Record<string, string> = {
   googleTrends: "Google Trends",
@@ -829,6 +854,7 @@ export function publicSnapshot(db: Db, cfg: Config, kill: KillSwitch) {
     capacityRunwayDays: cfg.risk.adaptive.enabled && !cfg.dryRun
       ? `${cfg.risk.adaptive.minRunwayDays}d` : null,
     launches: recentLaunches(db, cfg, 24),
+    projectToken: projectTokenView(cfg),
     feeds: feedHealth(db, cfg).map(({ id, enabled, signalsLastHour, lastSeen, healthy }) => ({
       id, enabled, signalsLastHour, lastSeen, healthy,
     })),
