@@ -22,6 +22,7 @@ import { claimCreatorFees } from "../chain/fees.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
 import { loadWallet, publishWalletAddress } from "../chain/wallet.ts";
 import { notifyLaunch } from "../social/telegram.ts";
+import { postLaunchAnnouncement } from "../social/announce.ts";
 import { openPosition } from "../positions/store.ts";
 import { evaluateOpenPositions } from "../positions/manager.ts";
 import { kvGet, kvSet } from "../util/db.ts";
@@ -447,10 +448,13 @@ async function launchCandidate(
     safeHttpUrl(candidate.sampleUrl),
   );
 
-  // Operator alert. Real launches only -- a dry run must never look like a
-  // live one in the operator's phone. Never throws (see social/telegram.ts).
+  // Real launches only -- a dry run must never look like a live one, either
+  // in the operator's phone (telegram) or on the public account (X). Both
+  // are best-effort by construction: never throw, never affect the launch
+  // they describe.
   if (!isPretend(cfg)) {
     await notifyLaunch(identity, result.mint, cfg, candidate);
+    await postLaunchAnnouncement(identity, result.mint, cfg, budget, thesisUrl ?? undefined);
   }
 
   const { solDelta: launchCost, measured } = resolveLaunchCost(cfg, result, devBuySol);

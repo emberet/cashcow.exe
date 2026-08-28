@@ -543,13 +543,20 @@ export const distributionSchema = z.object({
 }).default({});
 
 /**
- * Outbound notifications about the bot's own activity.
+ * Outbound social surface, three distinct things that must not be conflated:
  *
- * NOTE: a separate in-flight change adds `xAnnounce` to this same block for
- * public launch announcements on X. These are different things and should
- * coexist -- `telegram` here is a PRIVATE operator alert (one chat, the
- * operator's own), not public promotion, which is why it carries no
- * disclosure text and no USD meter (the Telegram Bot API is free).
+ * - `project`: links stamped into every launched token's metadata.
+ * - `telegram`: a PRIVATE operator alert (one chat, the operator's own) --
+ *   not promotion, hence no disclosure text and no USD meter (the Telegram
+ *   Bot API is free).
+ * - `xAnnounce`: PUBLIC posts about the bot's own real launches from its own
+ *   disclosed account. NOT the excluded "automated shilling from fake
+ *   accounts" (docs/DECISIONS.md #2) -- that exclusion is about concealment,
+ *   and this is a bot transparently posting its own activity from an account
+ *   that says what it is. Off by default like every other new capability.
+ *   Uses a SEPARATE USD meter from feeds.xApi.monthlyUsdCap: that is a read
+ *   budget, this is a write budget, and one must never silently starve the
+ *   other.
  */
 export const socialSchema = z.object({
   /**
@@ -571,6 +578,23 @@ export const socialSchema = z.object({
     enabled: z.boolean().default(false),
     botTokenEnv: z.string().default("TELEGRAM_BOT_TOKEN"),
     chatIdEnv: z.string().default("TELEGRAM_CHAT_ID"),
+  }).default({}),
+  xAnnounce: z.object({
+    enabled: z.boolean().default(false),
+    /** ~25 posts/month at estimatedCostPerPost's default. */
+    monthlyUsdCap: z.number().nonnegative().default(5),
+    /** X's 2026 pay-per-use pricing: $0.20/post when it contains a link,
+     *  which this always does -- there's no point announcing a coin without
+     *  a way to reach it. */
+    estimatedCostPerPost: z.number().positive().default(0.20),
+    /**
+     * UTC times ("HH:MM") at which a session-summary post goes out --
+     * launches today, fees claimed, realized P&L. Empty = no summaries, so
+     * enabling announcements alone never starts a posting schedule the
+     * operator did not ask for. Checked on the slow tick, same idiom as
+     * maybeClaimFees().
+     */
+    updateTimesUtc: z.array(z.string().regex(/^\d{2}:\d{2}$/)).default([]),
   }).default({}),
 }).default({});
 
