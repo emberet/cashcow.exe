@@ -21,6 +21,7 @@ import { availableParallelism } from "node:os";
 import { claimCreatorFees } from "../chain/fees.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
 import { loadWallet, publishWalletAddress } from "../chain/wallet.ts";
+import { notifyLaunch } from "../social/telegram.ts";
 import { openPosition } from "../positions/store.ts";
 import { evaluateOpenPositions } from "../positions/manager.ts";
 import { kvGet, kvSet } from "../util/db.ts";
@@ -428,6 +429,12 @@ async function launchCandidate(
     pinned.uri, candidate.score, JSON.stringify(candidate.feeds),
     Date.now(), result.signature ?? null, isPretend(cfg) ? 1 : 0,
   );
+
+  // Operator alert. Real launches only -- a dry run must never look like a
+  // live one in the operator's phone. Never throws (see social/telegram.ts).
+  if (!isPretend(cfg)) {
+    await notifyLaunch(identity, result.mint, cfg, candidate);
+  }
 
   const { solDelta: launchCost, measured } = resolveLaunchCost(cfg, result, devBuySol);
 

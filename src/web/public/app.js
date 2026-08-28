@@ -255,6 +255,43 @@ function render(d) {
         </div>`).join("")
     : `<div class="empty">Nothing read yet. Give the noses a minute.</div>`;
 
+  // --- the project's own coin (human-launched, excluded from every stat)
+  const pt = d.projectToken;
+  const ptCard = $("project-token-card");
+  if (pt && pt.mint) {
+    ptCard.hidden = false;
+    const ptShort = `${pt.mint.slice(0, 6)}…${pt.mint.slice(-6)}`;
+    $("project-token").innerHTML = `
+      <div class="dashrow" style="grid-template-columns:1fr auto">
+        <span class="label">Contract address</span>
+        <span>
+          <a href="${esc(pt.pumpFunUrl)}" target="_blank" rel="noopener noreferrer"
+             class="num" title="${esc(pt.mint)}">${esc(ptShort)}</a>
+          <button class="sm" data-copy="${esc(pt.mint)}" title="Copy full address">COPY</button>
+        </span>
+      </div>
+      <div class="dashrow" style="grid-template-columns:1fr auto">
+        <span class="label">Where to look</span>
+        <span>
+          <a href="${esc(pt.pumpFunUrl)}" target="_blank" rel="noopener noreferrer">pump.fun</a>
+          &nbsp;·&nbsp;
+          <a href="${esc(pt.solscanUrl)}" target="_blank" rel="noopener noreferrer">solscan</a>
+        </span>
+      </div>`;
+
+    ptCard.querySelectorAll("[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.copy);
+          btn.textContent = "COPIED";
+          setTimeout(() => { btn.textContent = "COPY"; }, 1200);
+        } catch { /* clipboard blocked; the link still works */ }
+      });
+    });
+  } else {
+    ptCard.hidden = true;
+  }
+
   // --- the purse
   const w = d.wallet;
   const purseCard = $("purse-card");

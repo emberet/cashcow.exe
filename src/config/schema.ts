@@ -391,6 +391,21 @@ export const assetsSchema = z.object({
      */
     maxDescriptionLength: z.number().int().positive().default(200),
     apiKeyEnv: z.string().default("ANTHROPIC_API_KEY"),
+    /**
+     * Append a factual provenance line to the coin's description saying which
+     * trend it came from and why it cleared the bar -- the term, the sources
+     * that corroborated it, and the score. A reader landing on the pump.fun
+     * page can then see what real-world thing the coin is about instead of
+     * only a model-written joke. On by default: a coin nobody can trace back
+     * to anything is exactly the shape of the ones that never traded.
+     */
+    includeProvenance: z.boolean().default(true),
+    /**
+     * Cap on creative description + provenance combined. Separate from
+     * maxDescriptionLength (which bounds only the model's own sentence), so
+     * turning provenance on cannot silently truncate the creative half.
+     */
+    maxTotalDescriptionLength: z.number().int().positive().default(500),
   }).default({}),
   image: z.object({
     /** `template` renders locally for ~free; `none` requires a fallback image. */
@@ -457,6 +472,24 @@ export const distributionSchema = z.object({
     { label: "operator", pct: 50 },
     { label: "weekly raffle", pct: 10 },
   ]),
+}).default({});
+
+/**
+ * Outbound notifications about the bot's own activity.
+ *
+ * NOTE: a separate in-flight change adds `xAnnounce` to this same block for
+ * public launch announcements on X. These are different things and should
+ * coexist -- `telegram` here is a PRIVATE operator alert (one chat, the
+ * operator's own), not public promotion, which is why it carries no
+ * disclosure text and no USD meter (the Telegram Bot API is free).
+ */
+export const socialSchema = z.object({
+  telegram: z.object({
+    /** Off by default; no-ops harmlessly without credentials either way. */
+    enabled: z.boolean().default(false),
+    botTokenEnv: z.string().default("TELEGRAM_BOT_TOKEN"),
+    chatIdEnv: z.string().default("TELEGRAM_CHAT_ID"),
+  }).default({}),
 }).default({});
 
 export const configSchema = z.object({
@@ -621,12 +654,24 @@ export const configSchema = z.object({
      * portal always shows it.
      */
     showWallet: z.boolean().default(true),
+    /**
+     * The project's OWN token, if one exists -- a mint address published on
+     * the dashboard so visitors can find it.
+     *
+     * Deliberately separate from the `launches` table: this coin did not come
+     * out of the scoring pipeline, so folding it in would flatter every
+     * automated statistic on the page (hit rate, best market cap, fees per
+     * launch). It is displayed on its own and excluded from all of them.
+     * Empty by default -- most deployments have no such token.
+     */
+    projectTokenMint: z.string().default(""),
   }).default({}),
   storage: z.object({
     dbPath: z.string().default("data/bot.db"),
     haltFile: z.string().default("data/HALT"),
   }).default({}),
   distribution: distributionSchema,
+  social: socialSchema,
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
     json: z.boolean().default(true),
