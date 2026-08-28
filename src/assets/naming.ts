@@ -19,6 +19,16 @@ export type TokenIdentity = {
   name: string;
   symbol: string;
   description: string;
+  /**
+   * The description WITHOUT the appended provenance line.
+   *
+   * `description` is what gets published in the token metadata, and since
+   * provenance was added it ends with "Auto-launched from the trend ...
+   * Score 71/100 ...". That sentence is useful to a human reading the coin
+   * page and actively harmful as input to an image model, which will try to
+   * draw the words. Anything generating artwork must read this field.
+   */
+  creativeDescription?: string;
   source: "model" | "fallback";
   /**
    * Set when the model judges the underlying trend to be a real brand, product
@@ -132,10 +142,17 @@ export function withProvenance(
   identity: TokenIdentity, candidate: Candidate, cfg: Config,
 ): TokenIdentity {
   const a = cfg.assets.naming;
-  if (!a.includeProvenance) return identity;
+  // Always preserve the creative half separately, even when provenance is
+  // off, so downstream consumers can rely on the field always being there.
+  const creativeDescription = identity.description;
+  if (!a.includeProvenance) return { ...identity, creativeDescription };
 
   const combined = `${identity.description} ${provenanceLine(candidate)}`.trim();
-  return { ...identity, description: combined.slice(0, a.maxTotalDescriptionLength) };
+  return {
+    ...identity,
+    creativeDescription,
+    description: combined.slice(0, a.maxTotalDescriptionLength),
+  };
 }
 
 async function callClaude(
