@@ -48,6 +48,7 @@ const MIME: Record<string, string> = {
   // fall through to application/octet-stream and download as a blob
   // some browsers refuse to name properly.
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".txt": "text/plain; charset=utf-8",
 };
 
 type Client = { res: ServerResponse; admin: boolean; lastHash: string };

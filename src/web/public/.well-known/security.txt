@@ -1,0 +1,3 @@
+Contact: https://github.com/emberet/cashcow.exe/security/advisories/new
+Expires: 2027-08-28T00:00:00.000Z
+Preferred-Languages: en
