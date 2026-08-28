@@ -10,7 +10,7 @@ import {
   __resetThrottle,
 } from "../src/web/auth.ts";
 import { scryptSync } from "node:crypto";
-import { readingList } from "../src/web/queries.ts";
+import { readingList, recentLaunches } from "../src/web/queries.ts";
 import { applyChanges } from "../src/learning/guardrails.ts";
 
 /**
@@ -72,6 +72,30 @@ describe("URL scheme allowlist", () => {
     assert.equal(rows.length, 1, "only the safe link should survive");
     assert.equal(rows[0]?.url, "https://example.com/ok");
     assert.ok(!rows.some((r) => /javascript:/i.test(r.url)));
+  });
+
+  test("a hostile source_url on a launch is dropped, not the launch itself", () => {
+    // Unlike a reading-list row (dropped entirely on a bad URL), a launch is
+    // a real on-chain fact regardless of whether its source link is safe --
+    // only the link should disappear.
+    const db = openMemoryDb();
+    const cfg = configSchema.parse({ dryRun: true });
+    const stmt = db.prepare(
+      `INSERT INTO launches (mint, term, norm, name, symbol, uri, score, feeds,
+                             created_at, signature, dry_run, status, source_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'created', ?)`,
+    );
+    stmt.run("mintHostile", "Hostile", "hostile", "Hostile", "HOST", "https://example.invalid/m.json",
+      50, "[]", Date.now(), "sigHostile", "javascript:alert(1)");
+    stmt.run("mintSafe", "Safe", "safe", "Safe", "SAFE", "https://example.invalid/m2.json",
+      50, "[]", Date.now(), "sigSafe", "https://example.com/story");
+
+    const rows = recentLaunches(db, cfg, 10);
+    assert.equal(rows.length, 2, "both launches must still appear");
+    const hostile = rows.find((r) => r.mint === "mintHostile");
+    const safe = rows.find((r) => r.mint === "mintSafe");
+    assert.equal(hostile?.sourceUrl, null);
+    assert.equal(safe?.sourceUrl, "https://example.com/story");
   });
 });
 

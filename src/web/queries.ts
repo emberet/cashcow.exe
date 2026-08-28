@@ -163,6 +163,7 @@ export function recentLaunches(db: Db, cfg: Config, limit = 24) {
   // showing them leaks nothing -- and honesty about duds is the point.
   const rows = db.prepare(
     `SELECT l.mint, l.name, l.symbol, l.term, l.score, l.feeds, l.created_at, l.signature,
+            l.source_url,
             p.status AS pos_status, p.entry_sol, p.realized_pnl_sol, p.exit_reason,
             o.verdict AS o_verdict, o.peak_mcap_usd AS o_peak
        FROM launches l
@@ -200,6 +201,10 @@ export function recentLaunches(db: Db, cfg: Config, limit = 24) {
     url: r.signature
       ? `https://solscan.io/tx/${String(r.signature)}`
       : `https://solscan.io/token/${String(r.mint)}`,
+    // Re-validated on read, not trusted from storage -- same discipline as
+    // readingList()'s r.url: rows written before a scheme check existed (or
+    // by any future bug in the write path) must not become clickable now.
+    sourceUrl: r.source_url ? safeHttpUrl(String(r.source_url)) : null,
   }));
 }
 

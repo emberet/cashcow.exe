@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 import { configSchema } from "../src/config/schema.ts";
 import { themeOf } from "../src/assets/theme.ts";
 import { banner, glyph, GLYPH_H, GLYPH_W } from "../src/assets/font5x7.ts";
-import { renderTokenImage } from "../src/assets/image.ts";
+import { renderTokenImage, buildImagePrompt } from "../src/assets/image.ts";
 import type { TokenIdentity } from "../src/assets/naming.ts";
+import { openMemoryDb } from "../src/util/db.ts";
+import { BudgetGuard } from "../src/risk/budget.ts";
 
 const identity = (over: Partial<TokenIdentity> = {}): TokenIdentity => ({
   name: "Test Coin",
@@ -132,5 +134,79 @@ describe("renderTokenImage", () => {
     const a = await renderTokenImage(themed, identity({ symbol: "SAME" }), "openai model");
     const b = await renderTokenImage(themed, identity({ symbol: "SAME" }), "openai model");
     assert.deepEqual(a.buffer, b.buffer);
+    // This determinism is a property of the local template path specifically
+    // (seeded purely by the symbol) -- it does not, and is not expected to,
+    // hold for the Gemini path below, which is never exercised by this
+    // fixture since gemini.enabled defaults to false.
+  });
+
+  describe("with Gemini enabled but unreachable", () => {
+    const geminiCfg = configSchema.parse({
+      assets: { image: { themed: true, gemini: { enabled: true, apiKeyEnv: "TEST_GEMINI_KEY_UNSET" } } },
+    });
+
+    test("falls back to the local template when no API key is set", async () => {
+      delete process.env.TEST_GEMINI_KEY_UNSET;
+      const db = openMemoryDb();
+      const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
+      const img = await renderTokenImage(geminiCfg, identity({ symbol: "AGENT" }), "openai model", budget);
+      // Same theme/PNG-shaped result as the pure-local path -- the caller
+      // (runner/loop.ts) never sees a difference when Gemini is unreachable.
+      assert.equal(img.theme, "ascii");
+      assert.equal(img.contentType, "image/png");
+      assert.deepEqual([...img.buffer.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+    });
+
+    test("never charges the meter when the key is missing", async () => {
+      delete process.env.TEST_GEMINI_KEY_UNSET;
+      const db = openMemoryDb();
+      const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
+      await renderTokenImage(geminiCfg, identity(), "openai model", budget);
+      assert.equal(budget.meterUsed("gemini-image-usd"), 0);
+    });
+
+    test("falls back without charging once the monthly cap is already used up", async () => {
+      const cappedCfg = configSchema.parse({
+        assets: { image: { themed: true, gemini: {
+          enabled: true, apiKeyEnv: "TEST_GEMINI_KEY_CAPPED", monthlyUsdCap: 1, estimatedCostPerImage: 0.5,
+        } } },
+      });
+      process.env.TEST_GEMINI_KEY_CAPPED = "fake-key-for-budget-gating-test";
+      try {
+        const db = openMemoryDb();
+        const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
+        assert.equal(budget.meterCharge("gemini-image-usd", 1, 1), true); // exhaust the cap first
+
+        const img = await renderTokenImage(cappedCfg, identity(), "openai model", budget);
+        assert.equal(img.contentType, "image/png"); // local fallback still produced something
+        assert.equal(budget.meterUsed("gemini-image-usd"), 1, "must not have charged a second time");
+      } finally {
+        delete process.env.TEST_GEMINI_KEY_CAPPED;
+      }
+    });
+  });
+});
+
+describe("buildImagePrompt", () => {
+  test("includes the coin's name, symbol, and description", () => {
+    const prompt = buildImagePrompt(
+      identity({ name: "Trips", symbol: "TRIPS", description: "a trippy trend" }), "monogram",
+    );
+    assert.match(prompt, /Trips/);
+    assert.match(prompt, /TRIPS/);
+    assert.match(prompt, /trippy trend/);
+  });
+
+  test("carries a distinct style phrase per theme", () => {
+    const ascii = buildImagePrompt(identity(), "ascii");
+    const slop = buildImagePrompt(identity(), "slop");
+    const monogram = buildImagePrompt(identity(), "monogram");
+    assert.notEqual(ascii, slop);
+    assert.notEqual(ascii, monogram);
+    assert.notEqual(slop, monogram);
+  });
+
+  test("explicitly asks for no embedded text -- baked-in text from an image model is unreliable", () => {
+    assert.match(buildImagePrompt(identity(), "monogram"), /no text/i);
   });
 });

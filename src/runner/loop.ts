@@ -26,7 +26,7 @@ import { evaluateOpenPositions } from "../positions/manager.ts";
 import { kvGet, kvSet } from "../util/db.ts";
 import { effectiveScoring } from "../risk/experimentalWindow.ts";
 import { log, errFields } from "../util/log.ts";
-import { sleep } from "../util/http.ts";
+import { sleep, safeHttpUrl } from "../util/http.ts";
 import { consumeCommands } from "../web/commands.ts";
 import { computeCapacity } from "../risk/capacity.ts";
 import { recordLaunch, refreshOutcomes, attributeFees } from "../learning/outcomes.ts";
@@ -380,7 +380,7 @@ async function launchCandidate(
     );
   }
 
-  const image = await renderTokenImage(cfg, identity, candidate.term);
+  const image = await renderTokenImage(cfg, identity, candidate.term, budget);
   const pinned = await pinTokenMetadata(cfg, identity, image);
 
   const devBuySol = cfg.devPosition.enabled ? cfg.devPosition.buySol : 0;
@@ -421,12 +421,13 @@ async function launchCandidate(
 
   db.prepare(
     `INSERT INTO launches (mint, term, norm, name, symbol, uri, score, feeds,
-                           created_at, signature, dry_run, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created')`,
+                           created_at, signature, dry_run, status, source_url)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?)`,
   ).run(
     result.mint, candidate.term, candidate.key, identity.name, identity.symbol,
     pinned.uri, candidate.score, JSON.stringify(candidate.feeds),
     Date.now(), result.signature ?? null, isPretend(cfg) ? 1 : 0,
+    safeHttpUrl(candidate.sampleUrl),
   );
 
   const { solDelta: launchCost, measured } = resolveLaunchCost(cfg, result, devBuySol);
