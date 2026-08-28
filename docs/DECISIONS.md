@@ -1086,15 +1086,26 @@ until an unrelated SIGKILL-and-relaunch happened to restart it and the fix
 started working — coincidentally, not because anyone restarted it on
 purpose.
 
-**Fix, this time.** `git fetch && git merge --ff-only origin/main`, then
-`launchctl kickstart -k gui/$(id -u)/com.cashcow.bot`, then confirmed via a
-fresh `signals` query that the previously-dark feed started contributing.
+**Fix, this time.** `git status --porcelain` (empty — `git merge --ff-only`
+can silently carry forward a dirty worktree's edits rather than refusing, so
+this has to be checked *before* merging, not inferred from the merge
+succeeding), then `git fetch && git merge --ff-only origin/main`. Before
+restarting, confirmed the LaunchAgent actually points at the checkout just
+updated: `plutil -p ~/Library/LaunchAgents/com.cashcow.bot.plist`, checking
+`WorkingDirectory` against `pwd` and `ProgramArguments` against the entry
+script — `ProgramArguments` here is the *relative* path `src/cli.ts`, so a
+wrong `WorkingDirectory` would load a different (or missing) `cli.ts`
+entirely, restart "successfully," and still run stale code. Only then
+`launchctl kickstart -k gui/$(id -u)/com.cashcow.bot`, confirmed via a fresh
+`signals` query that the previously-dark feed started contributing.
 
 **Deliberately not done.** No automated "is the running process's code
-behind what's on `main`" check exists yet, and this entry doesn't add one —
-manual verification (`git log HEAD..origin/main`, then a restart, then a
-live query proving the change took) is what caught it both times. A
-one-writer-process convention is already documented (the `withBalanceLock`
-gotcha in `CLAUDE.md`); the same convention needs "and it's running current
-code," not just "there's only one," which is a gap worth closing with real
-tooling rather than a third retelling of this entry.
+behind what's on `main`, from the checkout it's actually configured to run"
+check exists yet, and this entry doesn't add one — manual verification
+(clean worktree, `git log HEAD..origin/main`, the plist's `WorkingDirectory`/
+`ProgramArguments`, a restart, then a live query proving the change took) is
+what catches it today. A one-writer-process convention is already documented
+(the `withBalanceLock` gotcha in `CLAUDE.md`); the same convention needs "and
+it's running current code from the checkout it claims to run," not just
+"there's only one," which is a gap worth closing with real tooling rather
+than a fourth retelling of this entry.
