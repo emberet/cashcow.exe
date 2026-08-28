@@ -444,7 +444,37 @@ export const assetsSchema = z.object({
      * content-safety rejection) -- same "never blocks a launch, degrades to
      * deterministic local output" shape as assets/naming.ts's model call.
      */
+    /**
+     * Which generator draws the coin face. "local" keeps the SVG templates
+     * below and calls nothing -- the safe default, unchanged for any
+     * deployment that does not opt in.
+     *
+     * Whatever a provider returns is resized locally to width/height before
+     * it is pinned, so the pump.fun minimum is met no matter what the
+     * provider emits. See the note on `width` above: art shipped at 512x512,
+     * under that floor, once already.
+     */
+    provider: z.enum(["local", "cloudflare", "gemini"]).default("local"),
+    /**
+     * Cloudflare Workers AI. 10,000 neurons/day are free with no billing
+     * setup, and FLUX.1 [schnell] costs roughly 50-150 neurons for one
+     * image -- comfortably more headroom than this bot's launch rate needs,
+     * at zero marginal cost per launch. That directly answers this file's
+     * original objection to calling a generator API at all.
+     *
+     * The model takes no width/height parameter, which is exactly why the
+     * resize step above is mandatory rather than defensive.
+     */
+    cloudflare: z.object({
+      accountIdEnv: z.string().default("CLOUDFLARE_ACCOUNT_ID"),
+      apiTokenEnv: z.string().default("CLOUDFLARE_API_TOKEN"),
+      model: z.string().default("@cf/black-forest-labs/flux-1-schnell"),
+      /** Diffusion iterations. The model caps this at 8. */
+      steps: z.number().int().min(1).max(8).default(4),
+    }).default({}),
     gemini: z.object({
+      /** Superseded by `provider: "gemini"`; still honoured so an existing
+       *  config that set it keeps working. */
       enabled: z.boolean().default(false),
       /** "Nano Banana 2 Lite" -- cheapest current tier. Not a preview alias;
        *  those were shut down 2026-06-25 and would 404. */

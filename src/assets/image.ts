@@ -10,11 +10,15 @@ import type { BudgetGuard } from "../risk/budget.ts";
 /**
  * Token artwork.
  *
- * Two paths. When `assets.image.gemini.enabled`, the coin face is generated
- * by an image model from the trend itself; on ANY failure it falls back to
- * the local SVG templates below, which are also what runs when the generator
- * is off. See docs/DECISIONS.md for why the original "never call a generator
- * API" position was reversed.
+ * Two paths. When `assets.image.provider` is a generator ("cloudflare", or
+ * "gemini"), the coin face is generated from the trend itself; on ANY
+ * failure it falls back to the local SVG templates below, which are also
+ * what runs at the default `provider: "local"`. See docs/DECISIONS.md for
+ * why the original "never call a generator API" position was reversed.
+ *
+ * Generated output is ALWAYS resized locally before it leaves this module:
+ * flux-1-schnell takes no width/height argument, and pump.fun enforces a
+ * 1000x1000 minimum that this repo has already fallen under once.
  *
  * Why the generator won that argument: sampling the highest-market-cap coins
  * on pump.fun (2026-08-29) showed rendered scenes and ornate emblems, never a
@@ -43,8 +47,9 @@ import type { BudgetGuard } from "../risk/budget.ts";
 
 export type RenderedImage = {
   buffer: Buffer;
-  /** "image/png" for the local templates; Gemini may return either. */
-  contentType: "image/png" | "image/jpeg";
+  /** Always PNG: generated art is re-encoded by normalize(), so a
+   *  provider returning JPEG never reaches a caller. */
+  contentType: "image/png";
   filename: string;
   /** Which template drew it, for the launch log and after-the-fact review. */
   theme: ArtTheme;
@@ -268,18 +273,51 @@ export async function renderTokenImage(
     ? themeOf(term, identity.description)
     : "monogram";
 
-  const g = cfg.assets.image.gemini;
-  if (g.enabled && budget) {
+  // `provider` is the switch; gemini.enabled is still honoured so a config
+  // written before the switch existed keeps working.
+  const provider = cfg.assets.image.provider !== "local"
+    ? cfg.assets.image.provider
+    : (cfg.assets.image.gemini.enabled ? "gemini" : "local");
+
+  if (provider !== "local" && budget) {
     try {
-      return await generateGeminiImage(cfg, identity, theme, budget, term);
+      const raw = provider === "cloudflare"
+        ? await generateCloudflareImage(cfg, identity, theme, budget, term)
+        : await generateGeminiImage(cfg, identity, theme, budget, term);
+      // NEVER pin what a provider handed back unmodified: flux-1-schnell
+      // takes no width/height at all, and pump.fun enforces a 1000x1000
+      // floor that this repo has already fallen under once.
+      return await normalize(cfg, raw, identity, theme);
     } catch (e) {
-      log.warn("gemini image generation failed, using local template", {
-        term, err: String(e).slice(0, 160),
+      log.warn("image generation failed, using local template", {
+        provider, term, err: String(e).slice(0, 160),
       });
     }
   }
 
   return renderLocalTemplate(cfg, identity, theme);
+}
+
+/**
+ * Resize any generated image to the configured dimensions and re-encode as
+ * PNG. Local, free, and the only thing standing between a provider's own
+ * output size and pump.fun's stated minimum.
+ */
+async function normalize(
+  cfg: Config, bytes: Buffer, identity: TokenIdentity, theme: ArtTheme,
+): Promise<RenderedImage> {
+  const { width, height } = cfg.assets.image;
+  const buffer = await sharp(bytes)
+    .resize(width, height, { fit: "cover", position: "attention" })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+
+  return {
+    buffer,
+    contentType: "image/png",
+    theme,
+    filename: `${identity.symbol.toLowerCase()}.png`,
+  };
 }
 
 async function renderLocalTemplate(
@@ -364,7 +402,93 @@ export function buildImagePrompt(
   );
 }
 
-const GEMINI_METER_KEY = "gemini-image-usd";
+/**
+ * One meter for image generation regardless of provider, so this spend can
+ * never silently compete with the naming, feed or announcement budgets.
+ * Cloudflare's free tier charges 0, which leaves the meter inert today but
+ * already wired for a paid provider later.
+ */
+const IMAGE_METER_KEY = "image-gen-usd";
+
+function meterFor(cfg: Config): { cost: number; cap: number } {
+  const i = cfg.assets.image;
+  if (i.provider === "cloudflare") {
+    // Free within Cloudflare's daily neuron allocation; nothing to meter.
+    return { cost: 0, cap: 0 };
+  }
+  return { cost: i.gemini.estimatedCostPerImage, cap: i.gemini.monthlyUsdCap };
+}
+
+/** Charges the meter, or throws so the caller falls back to local art. */
+function chargeOrThrow(cfg: Config, budget: BudgetGuard): void {
+  const { cost, cap } = meterFor(cfg);
+  if (cost <= 0) return; // free provider: nothing to charge, nothing to cap
+  if (!budget.meterCharge(IMAGE_METER_KEY, cost, cap)) {
+    throw new Error(
+      `monthly image cap reached ($${budget.meterUsed(IMAGE_METER_KEY).toFixed(2)} of $${cap})`,
+    );
+  }
+}
+
+type CloudflareResponse = {
+  result?: { image?: string };
+  image?: string;
+  success?: boolean;
+  errors?: Array<{ message?: string }>;
+};
+
+/**
+ * Cloudflare Workers AI (FLUX.1 [schnell] by default).
+ *
+ * Returns raw bytes; `normalize()` owns sizing and encoding, because this
+ * model accepts no width/height and its native output would otherwise be
+ * pinned at whatever size it happens to emit.
+ *
+ * The seed is derived from the ticker rather than random, so a given symbol
+ * reproduces its own art -- the same determinism property the local
+ * templates have.
+ */
+async function generateCloudflareImage(
+  cfg: Config, identity: TokenIdentity, theme: ArtTheme, budget: BudgetGuard,
+  term = "",
+): Promise<Buffer> {
+  const c = cfg.assets.image.cloudflare;
+  const accountId = process.env[c.accountIdEnv];
+  const apiToken = process.env[c.apiTokenEnv];
+  if (!accountId) throw new Error(`${c.accountIdEnv} not set`);
+  if (!apiToken) throw new Error(`${c.apiTokenEnv} not set`);
+
+  chargeOrThrow(cfg, budget);
+
+  const res = await httpFetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${c.model}`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: buildImagePrompt(identity, theme, term).slice(0, 2048),
+        seed: hash(identity.symbol) % 2_147_483_647,
+        steps: c.steps,
+      }),
+      timeoutMs: 30_000,
+      retries: 1,
+    },
+  );
+
+  const json = (await res.json()) as CloudflareResponse;
+  if (json.success === false) {
+    throw new Error(json.errors?.[0]?.message ?? "cloudflare ai error");
+  }
+  // Cloudflare wraps results as { result, success, errors }; tolerate a bare
+  // { image } too rather than depending on the envelope staying put.
+  const b64 = json.result?.image ?? json.image;
+  if (!b64) throw new Error("cloudflare response contained no image data");
+
+  return Buffer.from(b64, "base64");
+}
 
 type GeminiResponse = {
   candidates?: Array<{
@@ -376,36 +500,28 @@ type GeminiResponse = {
 };
 
 /**
- * NOTE on endpoint shape: as of this writing Google has two documented image
- * endpoints in flux -- the long-established `:generateContent` +
- * `inlineData` shape used here (confirmed still live for the current
- * gemini-3.1 model family, and far more established than the alternative),
- * and a newer `/v1beta/interactions` shape with a different response
- * envelope. Verify against the live docs before the first real call --
- * see the plan's own verification step for this.
+ * NOTE on endpoint shape: Google has two documented image endpoints in
+ * flux -- the long-established `:generateContent` + `inlineData` shape used
+ * here, and a newer `/v1beta/interactions` shape. This path has never made a
+ * live call; verify against the docs before relying on it. Cloudflare is the
+ * verified provider (see docs/DECISIONS.md).
  */
 async function generateGeminiImage(
   cfg: Config, identity: TokenIdentity, theme: ArtTheme, budget: BudgetGuard,
   term = "",
-): Promise<RenderedImage> {
+): Promise<Buffer> {
   const g = cfg.assets.image.gemini;
   const apiKey = process.env[g.apiKeyEnv];
   if (!apiKey) throw new Error(`${g.apiKeyEnv} not set`);
 
-  // Charge before spending -- a bug can waste a call, never run up a bill.
-  if (!budget.meterCharge(GEMINI_METER_KEY, g.estimatedCostPerImage, g.monthlyUsdCap)) {
-    throw new Error(
-      `monthly Gemini image cap reached ($${budget.meterUsed(GEMINI_METER_KEY).toFixed(2)} of $${g.monthlyUsdCap})`,
-    );
-  }
+  chargeOrThrow(cfg, budget);
 
-  const prompt = buildImagePrompt(identity, theme, term);
   const res = await httpFetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${g.model}:generateContent`,
     {
       method: "POST",
       headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      body: JSON.stringify({ contents: [{ parts: [{ text: buildImagePrompt(identity, theme, term) }] }] }),
       timeoutMs: 20_000,
       retries: 1, // billable; do not hammer
     },
@@ -414,15 +530,8 @@ async function generateGeminiImage(
   const json = (await res.json()) as GeminiResponse;
   if (json.error) throw new Error(json.error.message ?? "gemini api error");
 
-  const part = json.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
-  const inline = part?.inlineData;
+  const inline = json.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData;
   if (!inline?.data) throw new Error("gemini response contained no image data");
 
-  const contentType = inline.mimeType === "image/jpeg" ? "image/jpeg" : "image/png";
-  return {
-    buffer: Buffer.from(inline.data, "base64"),
-    contentType,
-    theme,
-    filename: `${identity.symbol.toLowerCase()}.${contentType === "image/jpeg" ? "jpg" : "png"}`,
-  };
+  return Buffer.from(inline.data, "base64");
 }
