@@ -2,7 +2,7 @@ import type { Db } from "../util/db.ts";
 import type { Config } from "../config/schema.ts";
 import type { BudgetGuard } from "../risk/budget.ts";
 import { listOpen, closePosition, recordSellFailure, type PositionRow } from "./store.ts";
-import { valuePosition, sellAll } from "../chain/trade.ts";
+import { valuePosition, sellAll, isProtectedMint } from "../chain/trade.ts";
 import { log, errFields } from "../util/log.ts";
 
 /**
@@ -68,6 +68,17 @@ export async function evaluateOpenPositions(
   if (!open.length) return result;
 
   for (const pos of open) {
+    // Skipped before evaluation, not left to sellAll's throw. The guard there
+    // is the real rail, but reaching it every tick would burn sell attempts
+    // and eventually flag a deliberately-held position as "stuck", which is
+    // an alarm about nothing.
+    if (isProtectedMint(cfg, pos.mint)) {
+      log.debug("position skipped: mint is on the never-sell list", {
+        mint: pos.mint, symbol: pos.symbol,
+      });
+      continue;
+    }
+
     try {
       const decision = await evaluateOne(db, cfg, pos);
       if (!decision) continue;
