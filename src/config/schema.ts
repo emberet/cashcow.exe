@@ -457,13 +457,14 @@ export const assetsSchema = z.object({
     provider: z.enum(["local", "cloudflare", "gemini"]).default("local"),
     /**
      * Cloudflare Workers AI. 10,000 neurons/day are free with no billing
-     * setup, and FLUX.1 [schnell] costs roughly 50-150 neurons for one
-     * image -- comfortably more headroom than this bot's launch rate needs,
-     * at zero marginal cost per launch. That directly answers this file's
-     * original objection to calling a generator API at all.
+     * setup. Measured against the live API (2026-08-29), FLUX.1 [schnell]
+     * bills 172.8 neurons per image -- about 57 images a day free, against a
+     * launch rate of 3-10. Zero marginal cost per launch, which answers this
+     * file's original objection to calling a generator API at all.
      *
-     * The model takes no width/height parameter, which is exactly why the
-     * resize step above is mandatory rather than defensive.
+     * The model takes no width/height parameter and returns a 1024x1024
+     * JPEG, which is exactly why the resize/re-encode step above is
+     * mandatory rather than defensive.
      */
     cloudflare: z.object({
       accountIdEnv: z.string().default("CLOUDFLARE_ACCOUNT_ID"),

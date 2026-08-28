@@ -440,13 +440,16 @@ type CloudflareResponse = {
 /**
  * Cloudflare Workers AI (FLUX.1 [schnell] by default).
  *
- * Returns raw bytes; `normalize()` owns sizing and encoding, because this
- * model accepts no width/height and its native output would otherwise be
- * pinned at whatever size it happens to emit.
+ * Returns raw bytes; `normalize()` owns sizing and encoding. Both halves of
+ * that turned out to be load-bearing rather than defensive: verified against
+ * the live endpoint, this model returns a 1024x1024 **JPEG**, not the PNG
+ * the docs imply, and accepts no width/height argument to change it. Without
+ * the re-encode a JPEG would be pinned as `.png`, and without the resize the
+ * art would sit 24px over pump.fun's floor by luck rather than by design.
  *
- * The seed is derived from the ticker rather than random, so a given symbol
- * reproduces its own art -- the same determinism property the local
- * templates have.
+ * Output is NOT deterministic per ticker. A seed would have given that, but
+ * the API refuses the parameter (see below), so repeated launches of the
+ * same symbol get different art.
  */
 async function generateCloudflareImage(
   cfg: Config, identity: TokenIdentity, theme: ArtTheme, budget: BudgetGuard,
@@ -468,9 +471,13 @@ async function generateCloudflareImage(
         authorization: `Bearer ${apiToken}`,
         "content-type": "application/json",
       },
+      // No `seed`, despite the docs listing it as required: the live API
+      // rejects it outright with "Additional or unevaluated properties
+      // '/seed' at '/' not allowed" (HTTP 400). Sending it made every call
+      // fail and silently fall back to local art. Verified against the real
+      // endpoint 2026-08-29.
       body: JSON.stringify({
         prompt: buildImagePrompt(identity, theme, term).slice(0, 2048),
-        seed: hash(identity.symbol) % 2_147_483_647,
         steps: c.steps,
       }),
       timeoutMs: 30_000,

@@ -1117,9 +1117,9 @@ here, so in practice *every* launch silently fell back to the local SVG
 templates and the feature never once ran. `assets.image.provider` is now the
 switch (`local` | `cloudflare` | `gemini`), defaulting to `local`.
 
-**Why Cloudflare.** 10,000 neurons/day free with no billing setup, and
-FLUX.1 [schnell] costs roughly 50–150 neurons per image — on the order of 60+
-images a day free, against a launch rate of 3–10. That matters beyond
+**Why Cloudflare.** 10,000 neurons/day free with no billing setup.
+Measured against the live API, FLUX.1 [schnell] bills 172.8 neurons per
+image — about 57 images a day free, against a launch rate of 3–10. That matters beyond
 convenience: this file's *original* objection to calling a generator at all
 was per-launch cost against launches that mostly earn nothing (§1). A free
 provider answers that objection directly rather than overriding it.
@@ -1145,3 +1145,19 @@ is written and tested, and is the obvious upgrade if paid art is ever wanted.
 It is still flagged in-code as never having made a live call. The meter is now
 provider-agnostic (`image-gen-usd`) and charges nothing on a free provider,
 so the budget rail is already in place the day a paid one is selected.
+
+**What the live API actually did, versus its docs.** Three things only a real
+call surfaced, all of which would have failed silently:
+
+- `seed` is documented as a *required* parameter. The live endpoint rejects
+  it — `HTTP 400, "Additional or unevaluated properties '/seed' at '/' not
+  allowed"`. Sending it made every request fail, and because generation
+  falls back to local art on any error, the feature would have appeared to
+  work while never once generating anything.
+- The response is a **JPEG**, not the PNG the docs imply.
+- It is 1024×1024, with no parameter to change it.
+
+The last two were already handled by the mandatory re-encode/resize, which is
+the argument for having written it that way rather than trusting the provider.
+The first was a real bug, caught only because the endpoint was exercised for
+real before being trusted.
