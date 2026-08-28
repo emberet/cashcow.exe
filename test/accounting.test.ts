@@ -170,15 +170,16 @@ describe("distribution ledger", () => {
 
 // ==================================================================
 // Migration additivity: each new migration must not disturb earlier ones.
-// v8 only adds an index (idx_signals_dedupe); v9 only adds a nullable column
-// (peak_volume_h24_usd), so the table list is unchanged by either.
+// v8 only adds an index (idx_signals_dedupe); v9 and v10 each only add one
+// nullable column (peak_volume_h24_usd, source_url), so the table list is
+// unchanged by any of them.
 // ==================================================================
 
-describe("migration v9 is purely additive", () => {
-  test("a fresh database lands at user_version 9 with earlier tables intact", () => {
+describe("migration v10 is purely additive", () => {
+  test("a fresh database lands at user_version 10 with earlier tables intact", () => {
     const db = openMemoryDb();
     const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-    assert.equal(version, 9);
+    assert.equal(version, 10);
 
     const tables = new Set(
       (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>)
@@ -203,5 +204,17 @@ describe("migration v9 is purely additive", () => {
     assert.equal(col!.notnull, 0, "must be nullable so existing rows do not need backfilling");
     // A representative earlier column is still there, unchanged.
     assert.ok(cols.some((c) => c.name === "peak_mcap_usd"));
+  });
+
+  test("launches gained source_url, nullable, without disturbing existing columns", () => {
+    const db = openMemoryDb();
+    const cols = db.prepare(`PRAGMA table_info(launches)`).all() as Array<
+      { name: string; notnull: number }
+    >;
+    const col = cols.find((c) => c.name === "source_url");
+    assert.ok(col, "expected source_url on launches");
+    assert.equal(col!.notnull, 0, "must be nullable -- most signals have no URL at all");
+    // A representative earlier column is still there, unchanged.
+    assert.ok(cols.some((c) => c.name === "mint"));
   });
 });

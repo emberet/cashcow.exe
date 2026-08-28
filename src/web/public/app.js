@@ -377,7 +377,11 @@ function launchRow(l) {
     <span class="r grey hide-md">${esc(v ? v : "settling")}</span>
     <span class="r strong ${cls}">${esc(pnl)}</span>
     <span class="r grey hide-md">${esc(ago(l.createdAt))}</span>
-    <span class="r hide-md"><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" style="font-family:var(--display);font-size:14px">peek</a></span>
+    <span class="r hide-md"><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" style="font-family:var(--display);font-size:14px">peek</a>${
+      l.sourceUrl
+        ? ` · <a href="${esc(l.sourceUrl)}" target="_blank" rel="noopener noreferrer nofollow" style="font-family:var(--display);font-size:14px">source</a>`
+        : ""
+    }</span>
   </div>`;
 }
 

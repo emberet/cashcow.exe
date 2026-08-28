@@ -3,6 +3,9 @@ import type { Config } from "../config/schema.ts";
 import type { TokenIdentity } from "./naming.ts";
 import { themeOf, type ArtTheme } from "./theme.ts";
 import { banner, GLYPH_H } from "./font5x7.ts";
+import { httpFetch } from "../util/http.ts";
+import { log } from "../util/log.ts";
+import type { BudgetGuard } from "../risk/budget.ts";
 
 /**
  * Token artwork.
@@ -32,7 +35,8 @@ import { banner, GLYPH_H } from "./font5x7.ts";
 
 export type RenderedImage = {
   buffer: Buffer;
-  contentType: "image/png";
+  /** "image/png" for the local templates; Gemini may return either. */
+  contentType: "image/png" | "image/jpeg";
   filename: string;
   /** Which template drew it, for the launch log and after-the-fact review. */
   theme: ArtTheme;
@@ -237,17 +241,43 @@ function slopSvg(identity: TokenIdentity, width: number, height: number): string
 </svg>`;
 }
 
+/**
+ * Try Gemini-generated art, falling back to the local template on ANY
+ * failure -- missing key, exhausted budget, timeout, malformed response, or
+ * a content-safety rejection. Same "never blocks a launch, degrades to
+ * deterministic local output" shape as assets/naming.ts's generateIdentity().
+ * The naming-model spend that already happened before this step in
+ * loop.ts's launchCandidate() must not be wasted just because art fails.
+ */
 export async function renderTokenImage(
   cfg: Config,
   identity: TokenIdentity,
-  /** The trend phrase behind the coin. Drives template choice; artwork only. */
+  /** The trend phrase behind the coin. Drives template/prompt choice; artwork only. */
   term = "",
+  budget?: BudgetGuard,
 ): Promise<RenderedImage> {
-  const { width, height } = cfg.assets.image;
-
   const theme: ArtTheme = cfg.assets.image.themed
     ? themeOf(term, identity.description)
     : "monogram";
+
+  const g = cfg.assets.image.gemini;
+  if (g.enabled && budget) {
+    try {
+      return await generateGeminiImage(cfg, identity, theme, budget);
+    } catch (e) {
+      log.warn("gemini image generation failed, using local template", {
+        term, err: String(e).slice(0, 160),
+      });
+    }
+  }
+
+  return renderLocalTemplate(cfg, identity, theme);
+}
+
+async function renderLocalTemplate(
+  cfg: Config, identity: TokenIdentity, theme: ArtTheme,
+): Promise<RenderedImage> {
+  const { width, height } = cfg.assets.image;
 
   const svg =
     theme === "ascii" ? asciiSvg(identity, width, height) :
@@ -261,5 +291,88 @@ export async function renderTokenImage(
     contentType: "image/png",
     theme,
     filename: `${identity.symbol.toLowerCase()}.png`,
+  };
+}
+
+const THEME_STYLE: Record<ArtTheme, string> = {
+  ascii: "retro computer terminal / ASCII art aesthetic, monochrome or green-on-black",
+  slop: "loud tabloid-style meme poster aesthetic, bold and garish",
+  monogram: "clean abstract gradient logo aesthetic, simple geometric shapes",
+};
+
+/**
+ * Pure and exported for testing. No text/watermark requested: baked-in text
+ * from an image model is unreliable, and the ticker is already shown by
+ * pump.fun's own UI, so there is nothing gained by risking a garbled word
+ * inside the art itself.
+ */
+export function buildImagePrompt(identity: TokenIdentity, theme: ArtTheme): string {
+  return (
+    `Square profile picture / avatar artwork for a memecoin called ` +
+    `"${identity.name}" (ticker ${identity.symbol}). ${identity.description} ` +
+    `Style: ${THEME_STYLE[theme]}. No text, letters, numbers, or watermarks ` +
+    `anywhere in the image. No borders or frames.`
+  );
+}
+
+const GEMINI_METER_KEY = "gemini-image-usd";
+
+type GeminiResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }>;
+    };
+  }>;
+  error?: { message?: string };
+};
+
+/**
+ * NOTE on endpoint shape: as of this writing Google has two documented image
+ * endpoints in flux -- the long-established `:generateContent` +
+ * `inlineData` shape used here (confirmed still live for the current
+ * gemini-3.1 model family, and far more established than the alternative),
+ * and a newer `/v1beta/interactions` shape with a different response
+ * envelope. Verify against the live docs before the first real call --
+ * see the plan's own verification step for this.
+ */
+async function generateGeminiImage(
+  cfg: Config, identity: TokenIdentity, theme: ArtTheme, budget: BudgetGuard,
+): Promise<RenderedImage> {
+  const g = cfg.assets.image.gemini;
+  const apiKey = process.env[g.apiKeyEnv];
+  if (!apiKey) throw new Error(`${g.apiKeyEnv} not set`);
+
+  // Charge before spending -- a bug can waste a call, never run up a bill.
+  if (!budget.meterCharge(GEMINI_METER_KEY, g.estimatedCostPerImage, g.monthlyUsdCap)) {
+    throw new Error(
+      `monthly Gemini image cap reached ($${budget.meterUsed(GEMINI_METER_KEY).toFixed(2)} of $${g.monthlyUsdCap})`,
+    );
+  }
+
+  const prompt = buildImagePrompt(identity, theme);
+  const res = await httpFetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${g.model}:generateContent`,
+    {
+      method: "POST",
+      headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      timeoutMs: 20_000,
+      retries: 1, // billable; do not hammer
+    },
+  );
+
+  const json = (await res.json()) as GeminiResponse;
+  if (json.error) throw new Error(json.error.message ?? "gemini api error");
+
+  const part = json.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
+  const inline = part?.inlineData;
+  if (!inline?.data) throw new Error("gemini response contained no image data");
+
+  const contentType = inline.mimeType === "image/jpeg" ? "image/jpeg" : "image/png";
+  return {
+    buffer: Buffer.from(inline.data, "base64"),
+    contentType,
+    theme,
+    filename: `${identity.symbol.toLowerCase()}.${contentType === "image/jpeg" ? "jpg" : "png"}`,
   };
 }

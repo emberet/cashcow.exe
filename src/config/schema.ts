@@ -434,6 +434,28 @@ export const assetsSchema = z.object({
      * the ticker alone.
      */
     themed: z.boolean().default(false),
+    /**
+     * Real per-image AI art (Gemini's "Nano Banana" line) in place of the
+     * local SVG templates above -- a deliberate reversal of this block's own
+     * original "no generator API, no third-party imagery, no per-launch
+     * cost" posture (see docs/DECISIONS.md). Off by default like every other
+     * new capability here: the local templates keep working unchanged as
+     * the fallback on any failure (missing key, budget cap, timeout,
+     * content-safety rejection) -- same "never blocks a launch, degrades to
+     * deterministic local output" shape as assets/naming.ts's model call.
+     */
+    gemini: z.object({
+      enabled: z.boolean().default(false),
+      /** "Nano Banana 2 Lite" -- cheapest current tier. Not a preview alias;
+       *  those were shut down 2026-06-25 and would 404. */
+      model: z.string().default("gemini-3.1-flash-lite-image"),
+      apiKeyEnv: z.string().default("GEMINI_API_KEY"),
+      /** ~88 images/month at estimatedCostPerImage's default. Its own USD
+       *  meter, separate from every other one in this repo, so image-gen
+       *  spend can never silently compete with naming/feed/announce budgets. */
+      monthlyUsdCap: z.number().nonnegative().default(3),
+      estimatedCostPerImage: z.number().positive().default(0.034),
+    }).default({}),
   }).default({}),
   ipfs: z.object({
     provider: z.literal("pinata").default("pinata"),

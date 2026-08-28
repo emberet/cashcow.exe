@@ -92,6 +92,36 @@ async function checkPinata(cfg: Config, forMainnet: boolean): Promise<CheckResul
   }
 }
 
+/** Does the Gemini key actually authenticate? Only relevant when opted in --
+ *  the local SVG templates work with no credential at all. */
+async function checkGemini(cfg: Config): Promise<CheckResult> {
+  const name = "Gemini API key (image art)";
+  const g = cfg.assets.image.gemini;
+  if (!g.enabled) return OK(name, "disabled -- local templates in use, no credential needed");
+
+  const apiKey = process.env[g.apiKeyEnv];
+  if (!apiKey) {
+    return FAIL(name, "assets.image.gemini.enabled is on but no key is set -- every launch will fall back to local art",
+      "https://aistudio.google.com/apikey");
+  }
+
+  try {
+    const res = await httpFetch("https://generativelanguage.googleapis.com/v1beta/models", {
+      headers: { "x-goog-api-key": apiKey },
+      timeoutMs: 15_000,
+      retries: 0,
+      acceptStatuses: [401, 403],
+    });
+    if (res.status === 401 || res.status === 403) {
+      return FAIL(name, `key rejected (HTTP ${res.status}) — revoked or mistyped`,
+        "https://aistudio.google.com/apikey");
+    }
+    return OK(name, "authenticates; Gemini art is live");
+  } catch (e) {
+    return WARN(name, `could not reach the API: ${String(e).slice(0, 60)}`);
+  }
+}
+
 /** Is the RPC reachable, and is it one that can actually compete? */
 async function checkRpc(cfg: Config, forMainnet: boolean): Promise<CheckResult[]> {
   const out: CheckResult[] = [];
@@ -230,9 +260,10 @@ function checkPosture(db: Db, cfg: Config): CheckResult[] {
 export async function runPreflight(
   db: Db, cfg: Config, ctx: FeedContext, forMainnet = false,
 ): Promise<CheckResult[]> {
-  const [anthropic, pinata, rpc, wallet] = await Promise.all([
+  const [anthropic, pinata, gemini, rpc, wallet] = await Promise.all([
     checkAnthropic(cfg, forMainnet),
     checkPinata(cfg, forMainnet),
+    checkGemini(cfg),
     checkRpc(cfg, forMainnet),
     checkWallet(cfg),
   ]);
@@ -241,7 +272,7 @@ export async function runPreflight(
     posture.unshift(WARN("Target",
       `judging readiness for MAINNET while config says ${cfg.network}`));
   }
-  return [...posture, anthropic, pinata, ...rpc, ...wallet, ...checkFeeds(ctx)];
+  return [...posture, anthropic, pinata, gemini, ...rpc, ...wallet, ...checkFeeds(ctx)];
 }
 
 export const SETUP_LINKS = `
@@ -253,6 +284,11 @@ export const SETUP_LINKS = `
                       Free tier is enough. pump.fun's own IPFS endpoint is
                       deprecated, so metadata must be pinned externally.
                       Pricing: https://pinata.cloud/pricing
+
+  Gemini API key      https://aistudio.google.com/apikey
+                      Only needed if assets.image.gemini.enabled is turned on
+                      -- the local SVG templates work with no key at all.
+                      Real per-image cost; see assets.image.gemini.monthlyUsdCap.
 
   Dedicated RPC       https://dashboard.helius.dev/signup
                       https://www.quicknode.com/chains/sol
