@@ -94,14 +94,55 @@ async function checkPinata(cfg: Config, forMainnet: boolean): Promise<CheckResul
 
 /** Does the Gemini key actually authenticate? Only relevant when opted in --
  *  the local SVG templates work with no credential at all. */
-async function checkGemini(cfg: Config): Promise<CheckResult> {
-  const name = "Gemini API key (image art)";
-  const g = cfg.assets.image.gemini;
-  if (!g.enabled) return OK(name, "disabled -- local templates in use, no credential needed");
+async function checkImageGenerator(cfg: Config): Promise<CheckResult> {
+  const name = "Image generator";
+  const i = cfg.assets.image;
+  const provider = i.provider !== "local"
+    ? i.provider
+    : (i.gemini.enabled ? "gemini" : "local");
 
+  if (provider === "local") {
+    return OK(name, "local templates -- no credential needed");
+  }
+
+  if (provider === "cloudflare") {
+    const c = i.cloudflare;
+    const accountId = process.env[c.accountIdEnv];
+    const apiToken = process.env[c.apiTokenEnv];
+    if (!accountId || !apiToken) {
+      return FAIL(name,
+        `provider is "cloudflare" but ${!accountId ? c.accountIdEnv : c.apiTokenEnv} is not set -- ` +
+        "every launch will silently fall back to local art",
+        "https://dash.cloudflare.com/profile/api-tokens");
+    }
+    try {
+      // Real authenticated call, per this file's own convention: a
+      // present-but-revoked token and an absent one fail identically at 3am.
+      const res = await httpFetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/models/search?per_page=1`,
+        {
+          headers: { authorization: `Bearer ${apiToken}` },
+          timeoutMs: 15_000, retries: 0, acceptStatuses: [400, 401, 403, 404],
+        },
+      );
+      if (res.status === 401 || res.status === 403) {
+        return FAIL(name, `Cloudflare token rejected (HTTP ${res.status}) -- revoked, mistyped, or missing the Workers AI permission`,
+          "https://dash.cloudflare.com/profile/api-tokens");
+      }
+      if (res.status === 404) {
+        return FAIL(name, "account not found -- check CLOUDFLARE_ACCOUNT_ID",
+          "https://dash.cloudflare.com/profile/api-tokens");
+      }
+      return OK(name, `Cloudflare Workers AI authenticates; ${c.model} is live`);
+    } catch (e) {
+      return WARN(name, `could not reach Cloudflare: ${String(e).slice(0, 60)}`);
+    }
+  }
+
+  const g = i.gemini;
   const apiKey = process.env[g.apiKeyEnv];
   if (!apiKey) {
-    return FAIL(name, "assets.image.gemini.enabled is on but no key is set -- every launch will fall back to local art",
+    return FAIL(name, `provider is "gemini" but ${g.apiKeyEnv} is not set -- every launch will fall back to local art`,
       "https://aistudio.google.com/apikey");
   }
 
@@ -116,7 +157,7 @@ async function checkGemini(cfg: Config): Promise<CheckResult> {
       return FAIL(name, `key rejected (HTTP ${res.status}) — revoked or mistyped`,
         "https://aistudio.google.com/apikey");
     }
-    return OK(name, "authenticates; Gemini art is live");
+    return OK(name, "Gemini authenticates; generated art is live");
   } catch (e) {
     return WARN(name, `could not reach the API: ${String(e).slice(0, 60)}`);
   }
@@ -263,7 +304,7 @@ export async function runPreflight(
   const [anthropic, pinata, gemini, rpc, wallet] = await Promise.all([
     checkAnthropic(cfg, forMainnet),
     checkPinata(cfg, forMainnet),
-    checkGemini(cfg),
+    checkImageGenerator(cfg),
     checkRpc(cfg, forMainnet),
     checkWallet(cfg),
   ]);
@@ -285,10 +326,17 @@ export const SETUP_LINKS = `
                       deprecated, so metadata must be pinned externally.
                       Pricing: https://pinata.cloud/pricing
 
-  Gemini API key      https://aistudio.google.com/apikey
-                      Only needed if assets.image.gemini.enabled is turned on
-                      -- the local SVG templates work with no key at all.
-                      Real per-image cost; see assets.image.gemini.monthlyUsdCap.
+  Image generator     Only needed if assets.image.provider is not "local" --
+                      the local SVG templates work with no credential at all.
+
+                      Cloudflare Workers AI (free, recommended):
+                        https://dash.cloudflare.com/profile/api-tokens
+                        Create a Custom token with Account > Workers AI > Read.
+                        Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN.
+                        10,000 neurons/day free; one image is ~50-150.
+
+                      Gemini (paid, no free image tier):
+                        https://aistudio.google.com/apikey
 
   Dedicated RPC       https://dashboard.helius.dev/signup
                       https://www.quicknode.com/chains/sol

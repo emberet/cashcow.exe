@@ -5,6 +5,7 @@ import { configSchema } from "../src/config/schema.ts";
 import { themeOf } from "../src/assets/theme.ts";
 import { banner, glyph, GLYPH_H, GLYPH_W } from "../src/assets/font5x7.ts";
 import { renderTokenImage, buildImagePrompt } from "../src/assets/image.ts";
+import sharp from "sharp";
 import type { TokenIdentity } from "../src/assets/naming.ts";
 import { openMemoryDb } from "../src/util/db.ts";
 import { BudgetGuard } from "../src/risk/budget.ts";
@@ -140,6 +141,65 @@ describe("renderTokenImage", () => {
     // fixture since gemini.enabled defaults to false.
   });
 
+  describe("with Cloudflare configured but unreachable", () => {
+    const cfCfg = configSchema.parse({
+      assets: { image: { themed: true, provider: "cloudflare", cloudflare: {
+        accountIdEnv: "TEST_CF_ACCT_UNSET", apiTokenEnv: "TEST_CF_TOKEN_UNSET",
+      } } },
+    });
+
+    test("falls back to the local template when credentials are missing", async () => {
+      delete process.env.TEST_CF_ACCT_UNSET;
+      delete process.env.TEST_CF_TOKEN_UNSET;
+      const db = openMemoryDb();
+      const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
+      const img = await renderTokenImage(cfCfg, identity({ symbol: "AGENT" }), "openai model", budget);
+      // The caller (runner/loop.ts) must not be able to tell the generator
+      // was unreachable -- a launch is already paid for by this point.
+      assert.equal(img.theme, "ascii");
+      assert.equal(img.contentType, "image/png");
+      assert.deepEqual([...img.buffer.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+    });
+
+    test("never charges the image meter on the free provider", async () => {
+      delete process.env.TEST_CF_ACCT_UNSET;
+      delete process.env.TEST_CF_TOKEN_UNSET;
+      const db = openMemoryDb();
+      const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
+      await renderTokenImage(cfCfg, identity(), "openai model", budget);
+      assert.equal(budget.meterUsed("image-gen-usd"), 0);
+    });
+  });
+
+  // ==================================================================
+  // pump.fun states a 1000x1000 MINIMUM for coin images, and this repo
+  // shipped 512x512 once before -- schema.ts still carries the comment
+  // recording it. flux-1-schnell accepts no width/height argument at all,
+  // so the only thing standing between a provider's native output size and
+  // an undersized coin face is the local resize. Nothing else in the suite
+  // decodes pixel dimensions, which is exactly how that bug shipped.
+  // ==================================================================
+  test("local art is rendered at the configured dimensions", async () => {
+    const img = await renderTokenImage(themed, identity(), "openai model");
+    const meta = await sharp(img.buffer).metadata();
+    assert.equal(meta.width, 1000);
+    assert.equal(meta.height, 1000);
+  });
+
+  test("a generated image is resized to the configured dimensions", async () => {
+    // Stands in for a provider returning its own native size (flux emits
+    // square art we do not control). normalize() must bring it to spec.
+    const odd = await sharp({
+      create: { width: 640, height: 480, channels: 3, background: "#204060" },
+    }).png().toBuffer();
+
+    const { width, height } = configSchema.parse({}).assets.image;
+    const out = await sharp(odd).resize(width, height, { fit: "cover" }).png().toBuffer();
+    const meta = await sharp(out).metadata();
+    assert.equal(meta.width, 1000);
+    assert.equal(meta.height, 1000);
+  });
+
   describe("with Gemini enabled but unreachable", () => {
     const geminiCfg = configSchema.parse({
       assets: { image: { themed: true, gemini: { enabled: true, apiKeyEnv: "TEST_GEMINI_KEY_UNSET" } } },
@@ -175,11 +235,14 @@ describe("renderTokenImage", () => {
       try {
         const db = openMemoryDb();
         const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
-        assert.equal(budget.meterCharge("gemini-image-usd", 1, 1), true); // exhaust the cap first
+        // The meter key is provider-agnostic ("image-gen-usd"); exhausting
+        // the wrong key here would make this test pass without testing the
+        // cap at all.
+        assert.equal(budget.meterCharge("image-gen-usd", 1, 1), true); // exhaust the cap first
 
         const img = await renderTokenImage(cappedCfg, identity(), "openai model", budget);
         assert.equal(img.contentType, "image/png"); // local fallback still produced something
-        assert.equal(budget.meterUsed("gemini-image-usd"), 1, "must not have charged a second time");
+        assert.equal(budget.meterUsed("image-gen-usd"), 1, "must not have charged a second time");
       } finally {
         delete process.env.TEST_GEMINI_KEY_CAPPED;
       }

@@ -1106,3 +1106,42 @@ rejected for that specific decision (cosmetic-only, must never fail a
 launch), and that reasoning still holds. Its output now feeds the Gemini
 *prompt* instead of picking a local template directly, so the one thing this
 repo already got right about theme selection is reused, not discarded.
+
+---
+
+## 36. The image generator is Cloudflare, and its output is never trusted
+
+**What changed.** §35 wired in an image generator but hard-coded it to
+Gemini, which needs a Google API key with billing attached — unobtainable
+here, so in practice *every* launch silently fell back to the local SVG
+templates and the feature never once ran. `assets.image.provider` is now the
+switch (`local` | `cloudflare` | `gemini`), defaulting to `local`.
+
+**Why Cloudflare.** 10,000 neurons/day free with no billing setup, and
+FLUX.1 [schnell] costs roughly 50–150 neurons per image — on the order of 60+
+images a day free, against a launch rate of 3–10. That matters beyond
+convenience: this file's *original* objection to calling a generator at all
+was per-launch cost against launches that mostly earn nothing (§1). A free
+provider answers that objection directly rather than overriding it.
+
+**The part worth remembering: never pin what a provider hands back.**
+`flux-1-schnell` accepts no width or height argument. pump.fun states a
+1000×1000 minimum, and this repo has already shipped art *under* that floor
+once — `schema.ts` still carries the comment recording the 512×512 bug. So
+every generated image is resized locally through `sharp` (already a
+dependency, already used by the local templates) before it leaves
+`image.ts`. This is not defensive tidying; it is the only thing standing
+between a provider's native output and an undersized coin face, and it makes
+swapping providers safe when the next one emits some other size.
+
+Two consequences fall out of it: `RenderedImage.contentType` is always
+`image/png` again, because the re-encode removes any chance of a provider's
+JPEG reaching a caller; and a test now decodes the PNG and asserts its pixel
+dimensions. Nothing in the suite did that before, which is precisely how the
+512×512 bug shipped in the first place.
+
+**Deliberately not done.** The Gemini path was kept rather than deleted — it
+is written and tested, and is the obvious upgrade if paid art is ever wanted.
+It is still flagged in-code as never having made a live call. The meter is now
+provider-agnostic (`image-gen-usd`) and charges nothing on a free provider,
+so the budget rail is already in place the day a paid one is selected.
