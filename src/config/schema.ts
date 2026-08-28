@@ -459,6 +459,28 @@ export const distributionSchema = z.object({
   ]),
 }).default({});
 
+/**
+ * Announcing the bot's own real launches from its own disclosed account --
+ * NOT the excluded "automated shilling from fake accounts" (see
+ * docs/DECISIONS.md #2). The exclusion is about concealment; this is a bot
+ * transparently posting its own real activity from an account that says
+ * what it is. Off by default like every other new capability. Uses a
+ * SEPARATE USD meter from feeds.xApi.monthlyUsdCap -- that is a read
+ * budget, this is a write budget, and one must never silently starve the
+ * other.
+ */
+export const socialSchema = z.object({
+  xAnnounce: z.object({
+    enabled: z.boolean().default(false),
+    /** ~25 posts/month at estimatedCostPerPost's default. */
+    monthlyUsdCap: z.number().nonnegative().default(5),
+    /** X's 2026 pay-per-use pricing: $0.20/post when it contains a link,
+     *  which this always does -- there's no point announcing a coin without
+     *  a way to reach it. */
+    estimatedCostPerPost: z.number().positive().default(0.20),
+  }).default({}),
+}).default({});
+
 export const configSchema = z.object({
   /** Global no-op switch. When true, nothing ever signs or sends a transaction. */
   dryRun: z.boolean().default(true),
@@ -627,6 +649,7 @@ export const configSchema = z.object({
     haltFile: z.string().default("data/HALT"),
   }).default({}),
   distribution: distributionSchema,
+  social: socialSchema,
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
     json: z.boolean().default(true),

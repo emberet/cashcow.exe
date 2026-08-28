@@ -21,6 +21,7 @@ import { availableParallelism } from "node:os";
 import { claimCreatorFees } from "../chain/fees.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
 import { loadWallet, publishWalletAddress } from "../chain/wallet.ts";
+import { postLaunchAnnouncement } from "../social/announce.ts";
 import { openPosition } from "../positions/store.ts";
 import { evaluateOpenPositions } from "../positions/manager.ts";
 import { kvGet, kvSet } from "../util/db.ts";
@@ -428,6 +429,13 @@ async function launchCandidate(
     pinned.uri, candidate.score, JSON.stringify(candidate.feeds),
     Date.now(), result.signature ?? null, isPretend(cfg) ? 1 : 0,
   );
+
+  // Real launches only -- a dry-run or simulated launch must never post to a
+  // real, public account. Best-effort by construction (see announce.ts):
+  // never throws, never affects the launch this is announcing.
+  if (!isPretend(cfg)) {
+    await postLaunchAnnouncement(identity, result.mint, cfg, budget);
+  }
 
   const { solDelta: launchCost, measured } = resolveLaunchCost(cfg, result, devBuySol);
 
