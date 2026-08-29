@@ -1161,3 +1161,202 @@ The last two were already handled by the mandatory re-encode/resize, which is
 the argument for having written it that way rather than trusting the provider.
 The first was a real bug, caught only because the endpoint was exercised for
 real before being trusted.
+
+## 37. The rug flag was earned, and the fix is the boring one
+
+Solflare showed three warnings on every bot-launched coin. Two were bugs. The
+third was the wallet telling the truth about itself.
+
+**"Creator has a history of rugging tokens" (red).** Not a false positive. The
+creator wallet minted a coin, bought 0.05 SOL of it, and sold its *entire*
+position at ~30.1 minutes — eighteen times, near-identically. That is
+`devPosition.exit.maxHoldMinutes: 30` doing exactly what it was configured to
+do, and it is also the textbook rug fingerprint. A heuristic looking for
+"creator mints, pumps, dumps everything, on a timer" cannot tell the
+difference between that and the real thing, because at the level of on-chain
+behaviour there isn't one.
+
+It compounds in the worst direction: the flag attaches to the *wallet*, so
+every future launch inherits a red warning, which works directly against the
+discoverability problem several recent changes were aimed at.
+
+The economics settled it. Across 18 positions the dev bag earned **+0.158
+SOL**; creator fees over the same period earned **0.643 SOL**. The secondary
+strategy was damaging the primary one — and §1's whole argument is that fees,
+not the dev position, are the revenue model.
+
+So: `maxHoldMinutes` 30 → 1440.
+
+**The coupling that would have silently broken this.**
+`risk.maxConcurrentPositions` was **1**. Holding a position for 24h means the
+bot cannot open a second one for 24h, so raising the hold time *alone* would
+have stopped launches after the first one each day — with no error, no alert,
+and a plausible-looking "no candidate qualified" in the logs. Raised to 10 in
+the same change, which locks ~0.5 SOL (10 × 0.05) against a ~1.19 SOL wallet.
+`assertCoherent()` is the backstop if those numbers ever stop adding up.
+
+Both keys are `risk.*`/`devPosition.*`, so this is a permanent config edit and
+not a `boost-window`: the window cannot reach `devPosition.*` at all, by
+design (see the Gotchas entry). Worth knowing that an active window *does*
+override `maxConcurrentPositions` while it runs — `effectiveRisk()` replaces
+rather than maxes — so a stale window pinning 3 would quietly cap the new 10.
+
+**Stated honestly: this softens the pattern, it does not erase it.** A creator
+that sells 100% of its bag 24 hours later is still a creator that sells
+everything. If the flag persists, turning `devPosition.enabled` off is the
+change that actually removes the signature, and by the numbers above it costs
+almost nothing.
+
+**Deliberately not done: rotating the creator wallet per launch.** That is the
+obvious way to make the flag disappear, it would work, and it is precisely the
+"multi-wallet bundling ... to conceal dev ownership" that §2 excludes by name.
+The warning exists to let a buyer see who they are buying from; evading it by
+changing identity is not a fix, it is the thing the warning is for. The flag
+goes away by behaving differently, or it stays.
+
+**"Missing file metadata" (amber) — a real bug.** Fetching a live launched
+token's pinned JSON showed `name`, `symbol`, `description`, `image`,
+`showName`, `createdOn` — and no `properties.files`. That is the Metaplex
+descriptor wallets read to associate a file with a token. pump.fun itself
+never needed it, so it was never written. Added, additively; every existing
+field is untouched.
+
+**"Unverified token" (amber).** Partly generic to all pump.fun coins, but
+bot-launched tokens carried **zero social links** while the hand-launched
+project token had them. `pinTokenMetadata()` has accepted `twitter`/
+`telegram`/`website` since it was written and the one call site passed none.
+Now wired to a `social.project` config block. This does not make a token
+"verified" — that needs an external listing — but it removes the
+no-information-at-all shape, and gives a reader somewhere to go.
+
+## 38. Every coin looked the same, and the theme system was the reason
+
+Twenty of twenty real launches rendered in one visual style. This was
+measured, not eyeballed: `themeOf()` returned `monogram` for **100%** of them.
+Terms like "Panthers", "Detroit", "Trips" and "CIGR" match neither the AI
+keyword list nor the politics one, so everything landed on the fallback, and
+the fallback appended one fixed string to every prompt.
+
+The system was not broken — it was being used outside its design. `themeOf()`
+was built to choose between three *local templates*, where three coarse
+buckets is the right resolution. Driving generative art with it means the
+prompt has exactly three possible values, and in practice one.
+
+Kept `themeOf()`: it is free, local, and correct when it does match. Stopped
+it being the *only* input. Each theme now holds a pool of genuinely distinct
+art directions — different media and moods (cinematic photoreal, engraved
+plate, oil painting, 3D render, risograph, neon synthwave, storybook,
+brutalist poster), not eight rewordings of "ornate seal" — and the per-coin
+pick is `hash(identity.symbol) % pool.length`. The `monogram` pool is the
+largest because it is ~100% of real traffic.
+
+This also restores something lost in §36. The Cloudflare endpoint rejects
+`seed`, so there is no provider-side determinism available; keying the art
+direction off the ticker puts reproducibility back in the *prompt*, which is
+the one input we control. Same ticker, same art direction, every time.
+
+**The tests are the point.** Three assertions that the previous code would
+have failed: real launch tickers produce more than one style (20/20 identical
+fails this), the same symbol always maps to the same style, and every pool
+entry is reachable. The last one matters because a hash that collapses onto a
+few buckets is the same bug wearing a hat.
+
+## 39. A zero balance is not a loss: 0.0975 SOL that never happened
+
+Routine maintenance turned up two positions closed as `no_balance` with a full
+`-0.05` write-off each. Both were wrong, and the ledger already knew it.
+
+`SMG` and `FTFS` each had a `dev_sell` row of **+0.04874043 SOL** with a real
+signature, and both signatures fetch from mainnet with `err: null`. The sales
+landed. The positions table recorded `exit_sol 0` and a total loss anyway.
+
+**How it happened.** `sellAll()` reads the live token balance and returns early
+when it is zero — correct in isolation. The exit path then read that zero as
+"the tokens never came back, write it off." The actual sequence was:
+
+```
+23:14:24  exit failed -- "Signature ... has expired: block height exceeded"
+23:14:25  exit failed -- AnchorError NotEnoughTokensToSell (0x1787)
+23:14:25  exit failed -- NotEnoughTokensToSell
+23:14:35  position had no token balance, closed   -> booked -0.05
+```
+
+The first attempt **did land**; the client just stopped waiting for it.
+"Blockhash expired" means the confirmation timed out, not that the transaction
+failed. Every later attempt was then correctly told there were no tokens left
+to sell, and the final balance read of zero was the aftermath of a *successful*
+sale being mistaken for a failed one.
+
+**Why it mattered beyond the ledger being wrong.** Realized loss feeds
+`maxDailyLossSol`, which is a breaker that stops launches. Two phantom losses
+of 0.0487 each is 0.0975 SOL of fiction charged against a 0.2 SOL daily loss
+budget — nearly half of it — and the same wrong numbers are what
+`launch_outcomes` hands the tuner to learn from. A bug that invents losses is
+strictly worse than one that hides them: it makes the safety rails fire early,
+on nothing.
+
+**The fix.** `recoveredSolFromLedger()` asks the spend ledger whether a
+`dev_sell` for this mint landed after the position opened, and the exit path
+consults it before writing anything off. The ledger is the right authority:
+every real sale records a measured row through the same single choke point
+invariant 1 puts on spending, so if the money came back it is there. Scoped by
+mint, by `opened_at` (an earlier position's proceeds must not pay off a later
+one), and by `dry_run` (the pretend ledger can never credit a real position).
+
+A close with proceeds now reads `sold_before_retry` rather than `no_balance`,
+so the two cases stop being indistinguishable in the data. A genuine total
+loss — no sale on record — still books as `no_balance` at `-entry_sol`.
+
+The two live rows were corrected against their on-chain signatures. Realized
+P&L across closed positions moved from +0.1049 to **+0.20235 SOL**; the
+difference is entirely loss that never occurred.
+
+**Checked and clean:** the six launches that failed the same way
+(`TransactionExpiredBlockheightExceededError`) genuinely never landed — all
+six signatures are absent from mainnet. No orphaned mints, no spent SOL
+without a position. Failed launches also do not consume the daily cap, since
+`launchesLast24h()` counts ledger rows and those are only written after a
+launch settles. The exposure was specific to the exit path.
+
+## 40. The person-name screen was wrong in both directions
+
+Maintenance found the brand/likeness heuristic misfiring both ways in one day
+of real logs. The asymmetry is the whole design — a false positive costs a
+duller token name, a false negative is a right-of-publicity claim — so the two
+halves are not equally urgent, but both were real.
+
+**False positives: 7 in a day.** `"Tiger Rally"`, `"Brazilian Vibes"`,
+`"Now You"`, `"Networth Until"` were all rejected as person names. They are
+title-cased sentence fragments the phrase extractor happened to capitalise.
+Each rejection forces fallback naming, which is how launches ended up with
+tickers like `NETWORTH` and `FLEX` — directly against the goal of the last
+several changes.
+
+Fixed the way the list was already designed to be fixed: `NOT_A_PERSON`
+already carried `"the"`, `"of"`, `"and"`, `"for"`, so it was extended with the
+function words that actually appeared (`now`, `you`, `until`, `what`, `who`
+…) and with market/meme vocabulary (`vibes`, `rally`, `pump`, `chart`,
+`flex` …). Words that *are* real names — Wave, Storm, Winter, Summer, Rich,
+Young — were deliberately left out, because that is the expensive direction.
+
+**A false negative, found while fixing the above.** The per-word test was:
+
+```
+/^[A-Z][a-z'-]{1,}$/
+```
+
+with a comment directly above it reading *"allowing O'Brien, Al-Hassan"*. The
+character class has no uppercase in it. The `B` in `O'Brien` failed the test,
+`looksLikePersonName()` returned false, and the whole name was declared not a
+person — so **every apostrophe and hyphen name was silently exempt from the
+screen**. The code did the opposite of its own comment, and in the direction
+the config comment calls the costly one.
+
+Now `/^[A-Z][a-z]*(?:['-][A-Z]?[a-z]+)*$/`: an uppercase letter is allowed
+only immediately after an apostrophe or hyphen, so `O'Brien`, `Al-Hassan`,
+`Jean-Luc` and `D'Angelo` are screened while acronyms like `NFL` and `US`
+still fail and are not mistaken for people.
+
+Nothing in the suite exercised this function at all, which is how a regex that
+contradicted its own comment survived. `test/person-name.test.ts` now covers
+both directions, including the specific strings from the logs.

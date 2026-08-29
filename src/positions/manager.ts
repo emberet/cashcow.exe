@@ -1,7 +1,10 @@
 import type { Db } from "../util/db.ts";
 import type { Config } from "../config/schema.ts";
 import type { BudgetGuard } from "../risk/budget.ts";
-import { listOpen, closePosition, recordSellFailure, type PositionRow } from "./store.ts";
+import {
+  listOpen, closePosition, recordSellFailure, recoveredSolFromLedger,
+  type PositionRow,
+} from "./store.ts";
 import { valuePosition, sellAll, isProtectedMint } from "../chain/trade.ts";
 import { log, errFields } from "../util/log.ts";
 
@@ -145,12 +148,33 @@ async function evaluateOne(
 
   const value = await valuePosition(cfg, pos.mint, pos.entry_sol);
 
-  // The wallet no longer holds the token: nothing to exit, close the books.
+  // The wallet no longer holds the token. That does NOT mean the money is
+  // gone -- far more often it means the sell already landed and this is the
+  // retry looking at the aftermath. Ask the ledger before writing anything off.
   if (value.tokens === "0") {
+    const recovered = recoveredSolFromLedger(db, pos.mint, pos.opened_at, pos.dry_run);
+
     closePosition(db, pos.id, {
-      reason: "no_balance", exitSol: 0, exitTokens: "0", entrySol: pos.entry_sol,
+      reason: recovered.sol > 0 ? "sold_before_retry" : "no_balance",
+      exitSol: recovered.sol,
+      exitTokens: "0",
+      signature: recovered.signature ?? undefined,
+      entrySol: pos.entry_sol,
     });
-    log.warn("position had no token balance, closed", { mint: pos.mint });
+
+    if (recovered.sol > 0) {
+      // Booking 0 here is what previously turned two ordinary -0.0013 exits
+      // into -0.05 write-offs: 0.0975 SOL of loss that never happened, fed
+      // straight into maxDailyLossSol's breaker and into what the tuner
+      // learns from. See DECISIONS #39.
+      log.info("position had no token balance, but the sell had already landed", {
+        mint: pos.mint, recoveredSol: recovered.sol, signature: recovered.signature,
+      });
+    } else {
+      log.warn("position had no token balance and no sale on record, closed", {
+        mint: pos.mint,
+      });
+    }
     return undefined;
   }
 

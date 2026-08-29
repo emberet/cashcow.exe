@@ -115,6 +115,22 @@ const NOT_A_PERSON = new Set([
   "city", "united", "county", "state", "island", "park", "beach", "street",
   "water", "reserve", "energy", "power", "labs", "group", "corp", "inc",
   "the", "of", "and", "vs", "with", "for", "new", "old", "big", "little",
+
+  // Function words. A capitalised pair like "Now You" or "Networth Until" is
+  // a sentence fragment the extractor happened to title-case, not a name --
+  // measured 7 of these rejected in a day, each one forcing fallback naming
+  // and a worse ticker. Same idea as "the"/"of"/"and" above, extended to the
+  // fragments that actually showed up.
+  "now", "you", "your", "until", "when", "why", "how", "what", "who",
+  "here", "there", "this", "that", "into", "over", "after", "before",
+  "still", "just", "more", "than", "from", "about", "again", "not",
+
+  // Market and meme vocabulary. Deliberately conservative: nothing here is
+  // plausibly a surname. Words that ARE real names -- Wave, Storm, Winter,
+  // Summer, Rich, Young -- are left OUT on purpose, because a false negative
+  // is a right-of-publicity claim and a false positive is only a duller name.
+  "vibes", "rally", "pump", "dump", "chart", "trend", "flex", "mode",
+  "check", "alert", "hype", "streak", "score", "round", "match", "record",
 ]);
 
 /**
@@ -132,8 +148,17 @@ export function looksLikePersonName(text: string): boolean {
   if (words.length < 2 || words.length > 3) return false;
 
   for (const w of words) {
-    // Must be a capitalised alphabetic word (allowing O'Brien, Al-Hassan).
-    if (!/^[A-Z][a-z'-]{1,}$/.test(w)) return false;
+    // Must be a capitalised alphabetic word, allowing O'Brien and Al-Hassan --
+    // which the previous pattern claimed to allow and did not: `[a-z'-]` has
+    // no uppercase in it, so the B in O'Brien failed the test and the whole
+    // NAME was declared not-a-person. That is a false negative in the
+    // direction the config comment calls the expensive one, and it silently
+    // exempted every apostrophe and hyphen name from the screen.
+    //
+    // An uppercase letter is permitted only straight after an apostrophe or
+    // hyphen, so acronyms like NFL still fail and are not treated as people.
+    if (!/^[A-Z][a-z]*(?:['-][A-Z]?[a-z]+)*$/.test(w)) return false;
+    if (w.length < 2) return false;
     if (NOT_A_PERSON.has(w.toLowerCase())) return false;
   }
   return true;

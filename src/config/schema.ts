@@ -552,6 +552,20 @@ export const distributionSchema = z.object({
  * disclosure text and no USD meter (the Telegram Bot API is free).
  */
 export const socialSchema = z.object({
+  /**
+   * Links published in every launched token's metadata.
+   *
+   * Tokens were shipping with no socials at all, which is part of what a
+   * wallet reads as an unverified, information-less coin. This does not make
+   * a token "verified" on its own -- that needs an external listing -- but it
+   * gives a reader somewhere to go, and it is what the hand-launched token
+   * already carries. Empty by default; nothing is published unless set.
+   */
+  project: z.object({
+    twitter: z.string().default(""),
+    website: z.string().default(""),
+    telegram: z.string().default(""),
+  }).default({}),
   telegram: z.object({
     /** Off by default; no-ops harmlessly without credentials either way. */
     enabled: z.boolean().default(false),

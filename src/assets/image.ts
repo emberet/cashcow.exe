@@ -353,20 +353,74 @@ async function renderLocalTemplate(
  * So each direction below describes a SCENE or an EMBLEM with weight and
  * depth, never "a clean simple logo".
  */
-const THEME_STYLE: Record<ArtTheme, string> = {
-  ascii:
-    "retro-futurist computer terminal aesthetic: CRT phosphor glow, deep black " +
-    "background, green and amber monochrome, circuitry and dense code motifs, " +
-    "volumetric light, the look of a 1980s mainframe room photographed in the dark",
-  slop:
-    "dramatic political-poster aesthetic: bold saturated colour, heroic low-angle " +
-    "composition, stormy sky, newsprint and propaganda-poster energy, cinematic " +
-    "rim lighting, the look of a blockbuster film poster",
-  monogram:
-    "ornate official emblem aesthetic: a weighty metallic seal or crest rendered " +
-    "in gold and deep enamel colour, symmetrical, embossed, sitting on a rich dark " +
-    "background, the gravitas of a national institution's coat of arms",
+/**
+ * Art directions, as a POOL per theme rather than one string each.
+ *
+ * `themeOf()` is a three-way keyword match built to choose between three
+ * local SVG templates. Measured against real traffic it returns `monogram`
+ * for 20 of 20 launches -- terms like "Panthers", "Detroit" and "Trips"
+ * match neither the AI list nor the politics one -- so every generated coin
+ * was handed the identical style string and they all came out looking the
+ * same. That is fine for picking a template and far too coarse for driving
+ * generative art.
+ *
+ * So the theme still sets the register, and a per-coin pick inside it sets
+ * the look. `monogram` gets the widest pool because it is effectively all
+ * of the real traffic, and its entries are deliberately different MEDIA --
+ * an oil painting and an engraving do not look like each other, whereas
+ * eight rewordings of "ornate seal" would.
+ */
+const THEME_STYLES: Record<ArtTheme, string[]> = {
+  ascii: [
+    "retro-futurist computer terminal aesthetic: CRT phosphor glow, deep black background, " +
+    "green monochrome, dense circuitry motifs, the look of a 1980s mainframe room in the dark",
+    "clean isometric 3D render, matte plastic and brushed aluminium, soft studio lighting, " +
+    "pastel accent colours against a light background",
+    "blueprint schematic aesthetic: fine white linework on deep cyanotype blue, technical " +
+    "annotation marks, drafting-table precision",
+    "glitch-art aesthetic: chromatic aberration, scanline tearing, datamosh smears, " +
+    "high-contrast neon on black",
+  ],
+  slop: [
+    "dramatic political-poster aesthetic: bold saturated colour, heroic low-angle composition, " +
+    "stormy sky, propaganda-poster energy, cinematic rim lighting",
+    "mid-century offset-print poster: limited spot-colour palette, heavy paper grain, " +
+    "bold geometric shapes, visible misregistration",
+    "tabloid front-page collage: torn newsprint, halftone dots, red banner accents, " +
+    "photographic cut-outs layered at angles",
+    "baroque oil painting: dark chiaroscuro, dramatic single light source, rich varnished " +
+    "brushwork, museum canvas texture",
+  ],
+  monogram: [
+    "ornate official emblem: a weighty metallic seal or crest in gold and deep enamel, " +
+    "symmetrical, embossed, on a rich dark background, the gravitas of a coat of arms",
+    "cinematic photograph: shallow depth of field, golden-hour light, atmospheric haze, " +
+    "shot on medium format, painterly bokeh",
+    "detailed 19th-century steel engraving: fine cross-hatching, sepia ink on aged paper, " +
+    "the look of an antique banknote vignette",
+    "vibrant risograph print: two or three overprinted fluorescent inks, visible grain and " +
+    "offset registration, flat bold shapes",
+    "glossy 3D render: soft-body materials, subsurface scattering, studio softbox lighting, " +
+    "saturated candy colours on a seamless backdrop",
+    "neon synthwave illustration: magenta and cyan gradients, chrome highlights, grid horizon, " +
+    "sunset haze, 1980s airbrush feel",
+    "storybook gouache illustration: warm hand-painted texture, soft edges, generous negative " +
+    "space, gentle folk-art shapes",
+    "brutalist graphic composition: heavy geometric forms, raw concrete texture, stark high-" +
+    "contrast lighting, monumental scale",
+  ],
 };
+
+/**
+ * Pick this coin's art direction. Keyed on the ticker so a given symbol always
+ * draws the same style -- the reproducibility the local templates have, and
+ * which the generated path otherwise lost when the Cloudflare API turned out
+ * to reject `seed`.
+ */
+export function styleFor(theme: ArtTheme, symbol: string): string {
+  const pool = THEME_STYLES[theme];
+  return pool[hash(symbol) % pool.length]!;
+}
 
 /**
  * Pure and exported for testing. No text/watermark requested: baked-in text
@@ -391,7 +445,7 @@ export function buildImagePrompt(
   return (
     `A square 1:1 crypto token profile image depicting: ${subject}. ` +
     `Context: ${blurb} ` +
-    `Art direction: ${THEME_STYLE[theme]}. ` +
+    `Art direction: ${styleFor(theme, identity.symbol)}. ` +
     `It must look like professional concept art or a film poster -- richly ` +
     `detailed, dramatic lighting, strong depth and contrast, a single clear ` +
     `focal subject that still reads at thumbnail size. ` +
@@ -481,7 +535,16 @@ async function generateCloudflareImage(
         steps: c.steps,
       }),
       timeoutMs: 30_000,
-      retries: 1,
+      // 2 not 1, and 409 added: the endpoint returns 409 under momentary
+      // capacity pressure, and every failure here falls back to the LOCAL
+      // template -- which is the one identical-looking output this whole
+      // per-ticker art-direction change exists to get away from. Measured
+      // 2026-08-29: generating 6 coins back to back, 3 got 409s, and every
+      // one of those exact prompts returned 200 when sent again seconds
+      // later. Retrying is the difference between a distinct coin face and
+      // silently shipping the same gradient as everything else.
+      retries: 2,
+      retryStatuses: [409],
     },
   );
 

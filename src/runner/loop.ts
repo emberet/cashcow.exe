@@ -382,7 +382,15 @@ async function launchCandidate(
   }
 
   const image = await renderTokenImage(cfg, identity, candidate.term, budget);
-  const pinned = await pinTokenMetadata(cfg, identity, image);
+  // Socials are published with the token. `pinTokenMetadata` has always
+  // accepted these and was never given any, so every launch shipped with no
+  // links at all -- part of what a wallet reads as an unverified coin.
+  const p = cfg.social.project;
+  const pinned = await pinTokenMetadata(cfg, identity, image, {
+    ...(p.twitter ? { twitter: p.twitter } : {}),
+    ...(p.website ? { website: p.website } : {}),
+    ...(p.telegram ? { telegram: p.telegram } : {}),
+  });
 
   const devBuySol = cfg.devPosition.enabled ? cfg.devPosition.buySol : 0;
 

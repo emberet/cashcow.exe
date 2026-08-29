@@ -10,6 +10,17 @@ export type FetchOpts = {
   body?: string | Uint8Array;
   /** Treat these status codes as acceptable rather than errors. */
   acceptStatuses?: number[];
+  /**
+   * Extra status codes to retry, on top of the default 429/5xx.
+   *
+   * Opt-in per call rather than global, because a retryable status on one API
+   * is a "do not repeat this" on another -- 409 Conflict usually means the
+   * request collided with existing state, and blindly repeating it can
+   * double-submit. Cloudflare Workers AI is the case that needs it: it returns
+   * 409 under momentary capacity pressure and the identical request succeeds
+   * immediately afterwards.
+   */
+  retryStatuses?: number[];
 };
 
 export class HttpError extends Error {
@@ -23,7 +34,7 @@ export class HttpError extends Error {
   }
 }
 
-/** Fetch with a hard timeout and bounded exponential backoff on 5xx/429. */
+/** Fetch with a hard timeout and bounded exponential backoff on 5xx/429 (plus `retryStatuses`). */
 export async function httpFetch(url: string, opts: FetchOpts = {}): Promise<Response> {
   const { timeoutMs = 12_000, retries = 2 } = opts;
   let lastErr: unknown;
@@ -41,7 +52,8 @@ export async function httpFetch(url: string, opts: FetchOpts = {}): Promise<Resp
 
       if (res.ok || opts.acceptStatuses?.includes(res.status)) return res;
 
-      const retryable = res.status === 429 || res.status >= 500;
+      const retryable = res.status === 429 || res.status >= 500
+        || (opts.retryStatuses?.includes(res.status) ?? false);
       const body = await res.text().catch(() => "");
       if (!retryable || attempt === retries) throw new HttpError(res.status, url, body);
 
