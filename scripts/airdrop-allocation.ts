@@ -17,6 +17,12 @@
  *   node scripts/airdrop-allocation.ts \
  *     --mint 67iVaRRQ...pump --keep 1 --threshold 2000000 --hours 6 \
  *     --service-fee 0.05 --out <dir>
+ *
+ * `--service-fee` is the multisender's own cut and has no default on purpose:
+ * too small a reserve makes the last transfer fail. Measured for reference --
+ * tools.smithii.io charged a flat 0.049 SOL for 49 recipients (2026-08-29),
+ * independent of the amount sent. Verify before each run; these tools change
+ * their pricing.
  */
 
 import { loadConfig } from "../src/config/load.ts";
@@ -262,10 +268,18 @@ async function main() {
   const slot = await rpc<number>("getSlot", []);
   const walletSol = balLamports / 1e9;
 
+  // Measured against a real run (49 recipients via tools.smithii.io,
+  // 2026-08-29): 4 transactions and 0.00054 SOL of network fees -- 21x the
+  // 0.000025 a pure signature-fee model predicts, because multisenders attach
+  // priority fees to land during contention. The base signature fee is a
+  // rounding error; the priority fee is the whole cost. Modelled per
+  // RECIPIENT rather than per transaction, since batching varies by tool and
+  // over-reserving only leaves dust behind.
   const SIGNATURE_FEE = 0.000005;
-  const PER_TX_RECIPIENTS = 10;                       // slerf batches; conservative
+  const PRIORITY_FEE_PER_RECIPIENT = 0.00002;         // measured 0.00054 / 49, rounded up
+  const PER_TX_RECIPIENTS = 10;
   const txCount = Math.ceil(qualifying.length / PER_TX_RECIPIENTS);
-  const networkFee = txCount * SIGNATURE_FEE;
+  const networkFee = txCount * SIGNATURE_FEE + qualifying.length * PRIORITY_FEE_PER_RECIPIENT;
   const feeReserve = networkFee + a.serviceFee;
   const pot = walletSol - a.keep - feeReserve;
 
