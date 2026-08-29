@@ -71,6 +71,17 @@ export const xApiFeed: FeedAdapter = {
       retries: 1, // every retry is billable; do not hammer
     });
 
+    // Reconcile: the charge above was the worst case, and this query is
+    // filtered hard enough that most polls come back far short of a full page.
+    // X reports what it actually returned, so bill that instead of leaving the
+    // over-estimate on the meter. Without this the meter read $43.88 against
+    // roughly $9 of real spend and was about to stop the feed with most of the
+    // month's credit still unused. Refund is clamped at the meter, so a
+    // surprising result_count can never mint headroom.
+    const actualReads = json.meta?.result_count ?? json.data?.length ?? c.maxResults;
+    const overcharge = estimate - Math.min(actualReads, c.maxResults) * c.estimatedCostPerRead;
+    if (overcharge > 0) ctx.budget.meterRefund(METER_KEY, overcharge);
+
     const out: RawSignal[] = [];
     for (const t of json.data ?? []) {
       const text = t.text?.trim();
