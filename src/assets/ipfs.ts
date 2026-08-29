@@ -125,6 +125,15 @@ export async function pinTokenMetadata(
     ...(links.twitter ? { twitter: links.twitter } : {}),
     ...(links.telegram ? { telegram: links.telegram } : {}),
     ...(links.website ? { website: links.website } : {}),
+    // Metaplex's file descriptor. pump.fun itself does not need this, so it
+    // was omitted -- but wallets read it to associate a file with a token,
+    // and Solflare shows "Missing file metadata / No file metadata found
+    // associated to this token" on every coin that lacks it. Additive: every
+    // field above is unchanged.
+    properties: {
+      files: [{ uri: imageUri, type: image.contentType }],
+      category: "image",
+    },
   };
 
   const metadataCid = await uploadFile(

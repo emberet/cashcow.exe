@@ -35,7 +35,19 @@ if (!thresholdBound || !minObsBound) {
 export const EXPERIMENTAL_CEILINGS = {
   maxLaunchesPerDay: 15,
   maxSolPerDay: 1.2,
-  maxConcurrentPositions: 8,
+  // Raised 8 -> 10 on 2026-08-29, when devPosition.exit.maxHoldMinutes went to
+  // 24h and static maxConcurrentPositions went to 10 to match (DECISIONS #37).
+  // A ceiling BELOW the static baseline inverts this whole mechanism: because
+  // effectiveRisk() replaces rather than maxes, an active window would have
+  // silently NARROWED concurrency from 10 to 8 -- a window that reduces
+  // activity is the opposite of what it is for, and with a 24h hold it stalls
+  // launches with no error to explain it.
+  //
+  // Safe to raise because concurrency bounds CAPITAL LOCKUP, not loss: 10 x
+  // 0.05 = 0.5 SOL held at once. What can actually be spent and lost is
+  // bounded by maxSolPerDay (1.2) and maxDailyLossSol (0.6) below, and both
+  // are unchanged. This lets more positions be open, never more money at risk.
+  maxConcurrentPositions: 10,
   maxDailyLossSol: 0.6,
   maxHours: 48,
   // Scoring floors reuse the SAME bounds the tuner itself is allowed to

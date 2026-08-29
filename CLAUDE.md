@@ -153,7 +153,7 @@ generated identity, because the ticker does not exist until the model has run.
 - **`node:sqlite` returns null-prototype objects.** Fine to read, surprising to
   spread.
 - **Migrations are append-only** in `src/util/db.ts`. Never edit an existing one;
-  add the next. Currently at v9.
+  add the next. Currently at v10.
 - **`launch.simulate` builds the real transaction and simulates it.** Stronger
   evidence than `dryRun`, which never touches the chain. Both book against the
   pretend ledger via `isPretend()` — a simulation must never consume the real

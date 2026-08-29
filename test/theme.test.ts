@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { configSchema } from "../src/config/schema.ts";
 import { themeOf } from "../src/assets/theme.ts";
 import { banner, glyph, GLYPH_H, GLYPH_W } from "../src/assets/font5x7.ts";
-import { renderTokenImage, buildImagePrompt } from "../src/assets/image.ts";
+import { renderTokenImage, buildImagePrompt, styleFor } from "../src/assets/image.ts";
 import sharp from "sharp";
 import type { TokenIdentity } from "../src/assets/naming.ts";
 import { openMemoryDb } from "../src/util/db.ts";
@@ -315,5 +315,65 @@ describe("buildImagePrompt", () => {
     const legacy = identity({ description: "an older coin" });
     delete (legacy as { creativeDescription?: string }).creativeDescription;
     assert.match(buildImagePrompt(legacy, "monogram", "thing"), /an older coin/);
+  });
+});
+
+// ==================================================================
+// Every generated coin used to look the same, and the cause was measurable
+// rather than aesthetic: themeOf() returned "monogram" for 20 of 20 real
+// launches -- terms like "Panthers", "Detroit" and "Trips" match neither
+// keyword list -- so every coin got one identical style string.
+//
+// The theme still sets the register; a per-ticker pick inside it sets the
+// look. These tests would all have failed against the single-string version.
+// ==================================================================
+
+describe("art direction variety", () => {
+  // Real tickers from the launches table, which is where the problem showed.
+  const REAL = ["PANTHERS", "BRAZILIA", "SMG", "CIGR", "MOTOR", "FTFS",
+                "QUALFY", "TRIPS", "MOMENT", "IDGAF"];
+
+  test("real launch tickers do not all get the same style", () => {
+    const styles = new Set(REAL.map((s) => styleFor("monogram", s)));
+    assert.ok(styles.size > 1,
+      `all ${REAL.length} tickers produced one style -- this is the exact bug`);
+    // Not just two: a pool that collapses to a couple of entries is the same
+    // problem wearing a hat.
+    assert.ok(styles.size >= 3, `only ${styles.size} distinct styles across ${REAL.length} tickers`);
+  });
+
+  test("the same ticker always gets the same style", () => {
+    for (const s of REAL) {
+      assert.equal(styleFor("monogram", s), styleFor("monogram", s));
+    }
+    // Reproducibility is the property the local templates have and the
+    // generated path lost when Cloudflare rejected `seed` -- the prompt is
+    // now what carries it.
+    assert.equal(styleFor("slop", "TRIPS"), styleFor("slop", "TRIPS"));
+  });
+
+  test("every style in every pool is reachable", () => {
+    for (const theme of ["monogram", "ascii", "slop"] as const) {
+      const seen = new Set<string>();
+      // Enough distinct symbols to hit every bucket of a small pool.
+      for (let i = 0; i < 4000; i++) seen.add(styleFor(theme, `SYM${i}`));
+      assert.ok(seen.size >= 4,
+        `${theme} only ever produced ${seen.size} styles -- a pool entry is unreachable`);
+    }
+  });
+
+  test("styles differ across themes, so the register still matters", () => {
+    const mono = new Set(Array.from({ length: 500 }, (_, i) => styleFor("monogram", `S${i}`)));
+    const ascii = new Set(Array.from({ length: 500 }, (_, i) => styleFor("ascii", `S${i}`)));
+    for (const a of ascii) {
+      assert.ok(!mono.has(a), "a theme's pool must not leak into another's");
+    }
+  });
+
+  test("the prompt carries the chosen style, not a fixed one", () => {
+    const a = buildImagePrompt(identity({ symbol: "PANTHERS" }), "monogram", "Panthers");
+    const b = buildImagePrompt(identity({ symbol: "CIGR" }), "monogram", "Panthers");
+    // Same theme, same trend, different ticker -> different art direction.
+    assert.notEqual(a, b);
   });
 });
