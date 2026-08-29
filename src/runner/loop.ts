@@ -21,12 +21,13 @@ import { availableParallelism } from "node:os";
 import { claimCreatorFees } from "../chain/fees.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
 import { loadWallet, publishWalletAddress } from "../chain/wallet.ts";
+import { notifyLaunch } from "../social/telegram.ts";
 import { openPosition } from "../positions/store.ts";
 import { evaluateOpenPositions } from "../positions/manager.ts";
 import { kvGet, kvSet } from "../util/db.ts";
 import { effectiveScoring } from "../risk/experimentalWindow.ts";
 import { log, errFields } from "../util/log.ts";
-import { sleep } from "../util/http.ts";
+import { sleep, safeHttpUrl } from "../util/http.ts";
 import { consumeCommands } from "../web/commands.ts";
 import { computeCapacity } from "../risk/capacity.ts";
 import { recordLaunch, refreshOutcomes, attributeFees } from "../learning/outcomes.ts";
@@ -380,8 +381,16 @@ async function launchCandidate(
     );
   }
 
-  const image = await renderTokenImage(cfg, identity, candidate.term);
-  const pinned = await pinTokenMetadata(cfg, identity, image);
+  const image = await renderTokenImage(cfg, identity, candidate.term, budget);
+  // Socials are published with the token. `pinTokenMetadata` has always
+  // accepted these and was never given any, so every launch shipped with no
+  // links at all -- part of what a wallet reads as an unverified coin.
+  const p = cfg.social.project;
+  const pinned = await pinTokenMetadata(cfg, identity, image, {
+    ...(p.twitter ? { twitter: p.twitter } : {}),
+    ...(p.website ? { website: p.website } : {}),
+    ...(p.telegram ? { telegram: p.telegram } : {}),
+  });
 
   const devBuySol = cfg.devPosition.enabled ? cfg.devPosition.buySol : 0;
 
@@ -421,13 +430,20 @@ async function launchCandidate(
 
   db.prepare(
     `INSERT INTO launches (mint, term, norm, name, symbol, uri, score, feeds,
-                           created_at, signature, dry_run, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created')`,
+                           created_at, signature, dry_run, status, source_url)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?)`,
   ).run(
     result.mint, candidate.term, candidate.key, identity.name, identity.symbol,
     pinned.uri, candidate.score, JSON.stringify(candidate.feeds),
     Date.now(), result.signature ?? null, isPretend(cfg) ? 1 : 0,
+    safeHttpUrl(candidate.sampleUrl),
   );
+
+  // Operator alert. Real launches only -- a dry run must never look like a
+  // live one in the operator's phone. Never throws (see social/telegram.ts).
+  if (!isPretend(cfg)) {
+    await notifyLaunch(identity, result.mint, cfg, candidate);
+  }
 
   const { solDelta: launchCost, measured } = resolveLaunchCost(cfg, result, devBuySol);
 

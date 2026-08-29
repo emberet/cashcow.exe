@@ -23,6 +23,7 @@ import { overlaySummary } from "../learning/overlay.ts";
  * invitation to be front-run by anyone watching the page.
  */
 
+const MINUTE = 60_000;
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
 
@@ -162,6 +163,7 @@ export function recentLaunches(db: Db, cfg: Config, limit = 24) {
   // showing them leaks nothing -- and honesty about duds is the point.
   const rows = db.prepare(
     `SELECT l.mint, l.name, l.symbol, l.term, l.score, l.feeds, l.created_at, l.signature,
+            l.source_url,
             p.status AS pos_status, p.entry_sol, p.realized_pnl_sol, p.exit_reason,
             o.verdict AS o_verdict, o.peak_mcap_usd AS o_peak
        FROM launches l
@@ -199,6 +201,10 @@ export function recentLaunches(db: Db, cfg: Config, limit = 24) {
     url: r.signature
       ? `https://solscan.io/tx/${String(r.signature)}${cfg.network !== "mainnet-beta" ? `?cluster=${cfg.network}` : ""}`
       : `https://solscan.io/token/${String(r.mint)}${cfg.network !== "mainnet-beta" ? `?cluster=${cfg.network}` : ""}`,
+    // Re-validated on read, not trusted from storage -- same discipline as
+    // readingList()'s r.url: rows written before a scheme check existed (or
+    // by any future bug in the write path) must not become clickable now.
+    sourceUrl: r.source_url ? safeHttpUrl(String(r.source_url)) : null,
   }));
 }
 
@@ -340,29 +346,76 @@ const DECLINE_LABEL: Record<string, { text: string; tone: string }> = {
 };
 
 /**
+ * Collapse repeat rows so one recurring term cannot fill every slot in a
+ * small display list.
+ *
+ * `checkSaturation`'s free self-dedupe check (src/scoring/saturation.ts)
+ * correctly re-declines an already-launched term every single tick, forever
+ * -- that is intentional and free, but a trending topic (or a term someone
+ * keeps posting about) can dominate the raw `declined` table with dozens of
+ * identical rows, crowding out everything else in an operator-facing list.
+ * `rows` must already be ordered newest first, so the first occurrence seen
+ * for a key is the one whose fields are kept.
+ */
+function collapseRepeats<T extends { ts: number }>(
+  rows: T[],
+  keyOf: (row: T) => string,
+  limit: number,
+): Array<T & { count: number }> {
+  const groups = new Map<string, T & { count: number }>();
+  for (const row of rows) {
+    const key = keyOf(row);
+    const existing = groups.get(key);
+    if (existing) existing.count++;
+    else groups.set(key, { ...row, count: 1 });
+  }
+  return [...groups.values()].slice(0, limit);
+}
+
+/** Appends a "(×N)" marker to a display note when a row stands in for more than one collapsed repeat. */
+function suffixCount(note: string, count: number): string {
+  return count > 1 ? `${note} (×${count})` : note;
+}
+
+/**
  * Recently declined candidates.
  *
- * `delayHours` exists because a live rejection feed still leaks what the bot is
- * looking at right now. Delayed, it becomes an honest record of judgement
+ * `delayMinutes` exists because a live rejection feed still leaks what the bot
+ * is looking at right now. Delayed, it becomes an honest record of judgement
  * rather than a tip sheet. Admin passes 0; the public page does not.
+ *
+ * Fetches a wider raw window than `limit` and collapses same-term-and-reason
+ * repeats (keyed on `norm`, the already-normalized column, not raw `term`
+ * text) before slicing, so `limit` distinct decisions are returned rather
+ * than `limit` rows that might all be the same decision repeated.
  */
-export function recentDeclines(db: Db, cfg: Config, delayHours: number, limit = 8) {
+export function recentDeclines(db: Db, cfg: Config, delayMinutes: number, limit = 8) {
+  const fetchLimit = Math.min(limit * 8, 200);
   const rows = db.prepare(
-    `SELECT term, reason, detail, score, ts FROM declined
+    `SELECT term, norm, reason, detail, score, ts FROM declined
       WHERE dry_run = ? AND ts < ?
       ORDER BY ts DESC LIMIT ?`,
-  ).all(mode(cfg), Date.now() - delayHours * HOUR, limit) as Array<Record<string, unknown>>;
+  ).all(mode(cfg), Date.now() - delayMinutes * MINUTE, fetchLimit) as Array<Record<string, unknown>>;
 
-  return rows.map((r) => {
-    const reason = String(r.reason);
-    const meta = DECLINE_LABEL[reason] ?? { text: reason.toUpperCase(), tone: "milk" };
+  const mapped = rows.map((r) => ({
+    term: String(r.term),
+    norm: String(r.norm ?? r.term),
+    reason: String(r.reason),
+    detail: String(r.detail ?? ""),
+    score: Number(r.score ?? 0),
+    ts: Number(r.ts),
+  }));
+
+  return collapseRepeats(mapped, (r) => `${r.norm}\u0000${r.reason}`, limit).map((r) => {
+    const meta = DECLINE_LABEL[r.reason] ?? { text: r.reason.toUpperCase(), tone: "milk" };
     return {
-      term: String(r.term),
+      term: r.term,
       reason: meta.text,
       tone: meta.tone,
-      detail: String(r.detail ?? ""),
-      score: Number(r.score ?? 0),
-      ts: Number(r.ts),
+      detail: r.detail,
+      score: r.score,
+      ts: r.ts,
+      count: r.count,
     };
   });
 }
@@ -408,6 +461,31 @@ export type WalletView = {
   creatorRewardsUrl: string | null;
   network: string;
 };
+
+export type ProjectTokenView = {
+  mint: string;
+  pumpFunUrl: string;
+  solscanUrl: string;
+};
+
+/**
+ * The project's own token, if configured.
+ *
+ * Hardcoded URL templates around an operator-supplied mint, so invariant 11
+ * (safeHttpUrl on third-party URLs) does not apply -- there is no
+ * stranger-supplied URL here. The mint is still validated against Solana's
+ * base58 address shape so a malformed config value cannot produce a broken
+ * or misleading link.
+ */
+export function projectTokenView(cfg: Config): ProjectTokenView | null {
+  const mint = cfg.web.projectTokenMint.trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) return null;
+  return {
+    mint,
+    pumpFunUrl: `https://pump.fun/coin/${mint}`,
+    solscanUrl: `https://solscan.io/token/${mint}`,
+  };
+}
 
 /** Human names for the sources, so the page never shows a config key. */
 export const SOURCE_NAMES: Record<string, string> = {
@@ -537,20 +615,28 @@ function scoreHistogram(db: Db, cfg: Config) {
 }
 
 /** Competitor counts parsed out of the saturation reason we already stored. */
-function crowdedDetail(db: Db, cfg: Config, delayHours: number, limit = 10) {
+export function crowdedDetail(db: Db, cfg: Config, delayMinutes: number, limit = 10) {
+  const fetchLimit = Math.min(limit * 8, 200);
   const rows = db.prepare(
-    `SELECT term, detail, ts FROM declined
+    `SELECT term, norm, detail, ts FROM declined
       WHERE dry_run = ? AND reason = 'crowded' AND ts < ?
       ORDER BY ts DESC LIMIT ?`,
-  ).all(mode(cfg), Date.now() - delayHours * HOUR, limit) as Array<Record<string, unknown>>;
+  ).all(mode(cfg), Date.now() - delayMinutes * MINUTE, fetchLimit) as Array<Record<string, unknown>>;
 
-  return rows.map((r) => {
-    const detail = String(r.detail ?? "");
-    const m = detail.match(/^(\d+) similar/);
+  const mapped = rows.map((r) => ({
+    term: String(r.term),
+    norm: String(r.norm ?? r.term),
+    detail: String(r.detail ?? ""),
+    ts: Number(r.ts),
+  }));
+
+  return collapseRepeats(mapped, (r) => r.norm, limit).map((r) => {
+    const m = r.detail.match(/^(\d+) similar/);
     return {
-      term: String(r.term),
+      term: r.term,
       rivals: m ? Number(m[1]) : null,
-      ts: Number(r.ts),
+      ts: r.ts,
+      count: r.count,
     };
   });
 }
@@ -564,10 +650,10 @@ function crowdedDetail(db: Db, cfg: Config, delayHours: number, limit = 10) {
  * statistical; gates 5-7 name terms only from the delayed record; gate 8 is
  * already fully public because the tokens exist on chain.
  */
-export function gateDetails(db: Db, cfg: Config, delayHours: number) {
+export function gateDetails(db: Db, cfg: Config, delayMinutes: number) {
   const f = pipelineFunnel(db, cfg);
   const g = (i: number) => f.gates[i];
-  const declines = recentDeclines(db, cfg, delayHours, 40);
+  const declines = recentDeclines(db, cfg, delayMinutes, 40);
   const byFeed = signalsByFeed(db, 24);
   const totalSignals = byFeed.reduce((n, r) => n + r.n, 0);
 
@@ -646,7 +732,7 @@ export function gateDetails(db: Db, cfg: Config, delayHours: number) {
       rows: declines
         .filter((d) => contentReasons.has(d.reason))
         .slice(0, 10)
-        .map((d) => ({ term: d.term, note: d.reason, tone: d.tone })),
+        .map((d) => ({ term: d.term, note: suffixCount(d.reason, d.count), tone: d.tone })),
       delayed: true,
     },
     {
@@ -659,9 +745,9 @@ export function gateDetails(db: Db, cfg: Config, delayHours: number) {
         { label: "Already taken", value: f.crowdedOut ?? 0 },
         { label: "Rival limit", value: cfg.saturation.maxSimilar },
       ],
-      rows: crowdedDetail(db, cfg, delayHours).map((c) => ({
+      rows: crowdedDetail(db, cfg, delayMinutes).map((c) => ({
         term: c.term,
-        note: c.rivals != null ? `${c.rivals} rival coins` : "already minted",
+        note: suffixCount(c.rivals != null ? `${c.rivals} rival coins` : "already minted", c.count),
         tone: "pink",
       })),
       delayed: true,
@@ -680,7 +766,7 @@ export function gateDetails(db: Db, cfg: Config, delayHours: number) {
       rows: declines
         .filter((d) => d.reason === "ALLOWANCE GONE")
         .slice(0, 6)
-        .map((d) => ({ term: d.term, note: "allowance already spent", tone: "milk" })),
+        .map((d) => ({ term: d.term, note: suffixCount("allowance already spent", d.count), tone: "milk" })),
       delayed: true,
     },
     {
@@ -759,9 +845,9 @@ export function publicSnapshot(db: Db, cfg: Config, kill: KillSwitch) {
     stats: headlineStats(db, cfg),
     funnel: pipelineFunnel(db, cfg),
     // Public sees declines only after a delay -- see recentDeclines().
-    declines: recentDeclines(db, cfg, cfg.web.declineDelayHours),
-    declineDelayHours: cfg.web.declineDelayHours,
-    gateDetails: gateDetails(db, cfg, cfg.web.declineDelayHours),
+    declines: recentDeclines(db, cfg, cfg.web.declineDelayMinutes),
+    declineDelayMinutes: cfg.web.declineDelayMinutes,
+    gateDetails: gateDetails(db, cfg, cfg.web.declineDelayMinutes),
     reading: readingList(db, cfg, 24),
     claims: feeClaims(db, cfg),
     nextPollSeconds: nextPollSeconds(db, cfg),
@@ -773,6 +859,7 @@ export function publicSnapshot(db: Db, cfg: Config, kill: KillSwitch) {
     capacityRunwayDays: cfg.risk.adaptive.enabled && !cfg.dryRun
       ? `${cfg.risk.adaptive.minRunwayDays}d` : null,
     launches: recentLaunches(db, cfg, 24),
+    projectToken: projectTokenView(cfg),
     feeds: feedHealth(db, cfg).map(({ id, enabled, signalsLastHour, lastSeen, healthy }) => ({
       id, enabled, signalsLastHour, lastSeen, healthy,
     })),

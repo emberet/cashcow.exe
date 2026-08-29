@@ -356,7 +356,27 @@ a:focus-visible, button:focus-visible, input:focus-visible {
 .launch-row:hover { box-shadow: 7px 7px 0 var(--ink); }
 .launch-row.win { background: var(--row-win); }
 .launch-row .sym { font-family: var(--display); font-size: 22px; line-height: 1; }
-.launch-row .nm { font-weight: 600; font-size: 15.5px; }
+.launch-row .nm { font-weight: 600; font-size: 15.5px; min-width: 0; }
+.launch-row .nm-title { display: block; }
+
+/* The contract address, under the coin name. Sits inside the existing name
+   cell rather than taking a tenth column -- the row is already nine wide on
+   desktop and collapses to three on a phone. */
+.launch-row .ca {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 3px; font-weight: 500;
+}
+.launch-row .ca-mint {
+  font-family: var(--mono, ui-monospace, Menlo, monospace);
+  font-size: 12px; color: var(--grey);
+  text-decoration: none; letter-spacing: -0.2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-row .ca-mint:hover { color: var(--ink); text-decoration: underline; }
+.launch-row button.sm.ca-copy {
+  font-size: 10px; padding: 2px 6px; border-width: 2px; border-radius: 7px;
+  flex: none;
+}
 .launch-row .score {
   text-align: center; font-family: var(--display); font-size: 17px;
   background: var(--sun); border: 3px solid var(--ink);
@@ -612,6 +632,12 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   .gates { grid-template-columns: 1fr; }
   .plate.hero-plate .value { font-size: 54px; }
   .launch-row { grid-template-columns: 92px 1fr 84px; }
+  /* The name cell is ~97px here, which is not enough for a mint and a button
+     side by side -- without this the address is clipped mid-string. Let the
+     button drop below it instead of truncating the one thing people came to
+     copy. */
+  .launch-row .ca { flex-wrap: wrap; gap: 4px; }
+  .launch-row .ca-mint { font-size: 11px; }
   .bubble { font-size: 20px; }
 }
 

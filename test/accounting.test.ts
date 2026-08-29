@@ -1,7 +1,8 @@
 import { test, describe, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { configSchema } from "../src/config/schema.ts";
+import { configSchema, isPretend } from "../src/config/schema.ts";
+import { claimSendsRealTransaction } from "../src/chain/fees.ts";
 import { openMemoryDb, type Db } from "../src/util/db.ts";
 import { profitSummary } from "../src/web/queries.ts";
 import { recordDistributionSnapshot, listDistributions } from "../src/accounting/distribution.ts";
@@ -83,6 +84,40 @@ describe("profitSummary — no double-counting", () => {
 });
 
 // ==================================================================
+// A fee claim must hit the chain under exactly the conditions that make it
+// book as LIVE, and never under the ones that book it as PRETEND.
+//
+// This was broken in production. claimCreatorFees() gated the real
+// transaction on `cfg.dryRun` alone while runner/loop.ts booked the row with
+// `isPretend()` (= dryRun || launch.simulate). With simulate=true and
+// dryRun=false the bot sent a REAL claim and recorded it against the pretend
+// ledger: 0.642662095 SOL genuinely landed in the wallet on 2026-08-27
+// (signature 5MbmC35h..., confirmed on-chain) but `profit` reported 0 fees
+// and understated net profit by that amount.
+// ==================================================================
+
+describe("fee claiming - the send gate matches the accounting gate", () => {
+  const combos = [
+    { dryRun: false, simulate: false, sends: true },
+    { dryRun: true,  simulate: false, sends: false },
+    // The case that actually broke: live wallet, simulate on.
+    { dryRun: false, simulate: true,  sends: false },
+    { dryRun: true,  simulate: true,  sends: false },
+  ];
+
+  for (const { dryRun, simulate, sends } of combos) {
+    test(`dryRun=${dryRun} simulate=${simulate} -> ${sends ? "sends" : "does not send"}`, () => {
+      const c = configSchema.parse({ dryRun, launch: { simulate } });
+      assert.equal(claimSendsRealTransaction(c), sends);
+      // The load-bearing assertion: a claim is sent if and only if the row
+      // would be booked live. If these two ever disagree again, real money
+      // goes missing from the accounts.
+      assert.equal(claimSendsRealTransaction(c), !isPretend(c));
+    });
+  }
+});
+
+// ==================================================================
 // The distribution ledger is calculated figures only, and inert by default.
 // ==================================================================
 
@@ -135,14 +170,16 @@ describe("distribution ledger", () => {
 
 // ==================================================================
 // Migration additivity: each new migration must not disturb earlier ones.
-// v8 only adds an index (idx_signals_dedupe), so the table list is unchanged.
+// v8 only adds an index (idx_signals_dedupe); v9 and v10 each only add one
+// nullable column (peak_volume_h24_usd, source_url), so the table list is
+// unchanged by any of them.
 // ==================================================================
 
-describe("migration v8 is purely additive", () => {
-  test("a fresh database lands at user_version 8 with earlier tables intact", () => {
+describe("migration v10 is purely additive", () => {
+  test("a fresh database lands at user_version 10 with earlier tables intact", () => {
     const db = openMemoryDb();
     const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-    assert.equal(version, 8);
+    assert.equal(version, 10);
 
     const tables = new Set(
       (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>)
@@ -155,5 +192,29 @@ describe("migration v8 is purely additive", () => {
     ]) {
       assert.ok(tables.has(t), `missing table ${t}`);
     }
+  });
+
+  test("launch_outcomes gained peak_volume_h24_usd, nullable, without disturbing existing columns", () => {
+    const db = openMemoryDb();
+    const cols = db.prepare(`PRAGMA table_info(launch_outcomes)`).all() as Array<
+      { name: string; notnull: number }
+    >;
+    const col = cols.find((c) => c.name === "peak_volume_h24_usd");
+    assert.ok(col, "expected peak_volume_h24_usd on launch_outcomes");
+    assert.equal(col!.notnull, 0, "must be nullable so existing rows do not need backfilling");
+    // A representative earlier column is still there, unchanged.
+    assert.ok(cols.some((c) => c.name === "peak_mcap_usd"));
+  });
+
+  test("launches gained source_url, nullable, without disturbing existing columns", () => {
+    const db = openMemoryDb();
+    const cols = db.prepare(`PRAGMA table_info(launches)`).all() as Array<
+      { name: string; notnull: number }
+    >;
+    const col = cols.find((c) => c.name === "source_url");
+    assert.ok(col, "expected source_url on launches");
+    assert.equal(col!.notnull, 0, "must be nullable -- most signals have no URL at all");
+    // A representative earlier column is still there, unchanged.
+    assert.ok(cols.some((c) => c.name === "mint"));
   });
 });

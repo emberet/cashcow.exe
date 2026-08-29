@@ -22,3 +22,9 @@ keypair*.json
 data/*keypair*.json
 .DS_Store
 data/*.bak*
+# `data/*.bak*` does NOT cover `bot.db.backup-<timestamp>`, which is the name
+# the DB backups actually use -- verified with `git check-ignore`. A 72MB
+# database holding the full launch history was sitting untracked, one
+# `git add -A` away from being committed.
+data/*.backup-*
+data/*.backup

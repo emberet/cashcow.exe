@@ -5,6 +5,8 @@ import type { Db } from "../util/db.ts";
 import { authState } from "../web/auth.ts";
 import { httpFetch } from "../util/http.ts";
 import { redactEndpoint } from "../chain/rpc.ts";
+import { enabledFeeds } from "../feeds/registry.ts";
+import type { FeedContext } from "../feeds/types.ts";
 
 /**
  * Pre-flight for a live run.
@@ -90,6 +92,77 @@ async function checkPinata(cfg: Config, forMainnet: boolean): Promise<CheckResul
   }
 }
 
+/** Does the Gemini key actually authenticate? Only relevant when opted in --
+ *  the local SVG templates work with no credential at all. */
+async function checkImageGenerator(cfg: Config): Promise<CheckResult> {
+  const name = "Image generator";
+  const i = cfg.assets.image;
+  const provider = i.provider !== "local"
+    ? i.provider
+    : (i.gemini.enabled ? "gemini" : "local");
+
+  if (provider === "local") {
+    return OK(name, "local templates -- no credential needed");
+  }
+
+  if (provider === "cloudflare") {
+    const c = i.cloudflare;
+    const accountId = process.env[c.accountIdEnv];
+    const apiToken = process.env[c.apiTokenEnv];
+    if (!accountId || !apiToken) {
+      return FAIL(name,
+        `provider is "cloudflare" but ${!accountId ? c.accountIdEnv : c.apiTokenEnv} is not set -- ` +
+        "every launch will silently fall back to local art",
+        "https://dash.cloudflare.com/profile/api-tokens");
+    }
+    try {
+      // Real authenticated call, per this file's own convention: a
+      // present-but-revoked token and an absent one fail identically at 3am.
+      const res = await httpFetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/models/search?per_page=1`,
+        {
+          headers: { authorization: `Bearer ${apiToken}` },
+          timeoutMs: 15_000, retries: 0, acceptStatuses: [400, 401, 403, 404],
+        },
+      );
+      if (res.status === 401 || res.status === 403) {
+        return FAIL(name, `Cloudflare token rejected (HTTP ${res.status}) -- revoked, mistyped, or missing the Workers AI permission`,
+          "https://dash.cloudflare.com/profile/api-tokens");
+      }
+      if (res.status === 404) {
+        return FAIL(name, "account not found -- check CLOUDFLARE_ACCOUNT_ID",
+          "https://dash.cloudflare.com/profile/api-tokens");
+      }
+      return OK(name, `Cloudflare Workers AI authenticates; ${c.model} is live`);
+    } catch (e) {
+      return WARN(name, `could not reach Cloudflare: ${String(e).slice(0, 60)}`);
+    }
+  }
+
+  const g = i.gemini;
+  const apiKey = process.env[g.apiKeyEnv];
+  if (!apiKey) {
+    return FAIL(name, `provider is "gemini" but ${g.apiKeyEnv} is not set -- every launch will fall back to local art`,
+      "https://aistudio.google.com/apikey");
+  }
+
+  try {
+    const res = await httpFetch("https://generativelanguage.googleapis.com/v1beta/models", {
+      headers: { "x-goog-api-key": apiKey },
+      timeoutMs: 15_000,
+      retries: 0,
+      acceptStatuses: [401, 403],
+    });
+    if (res.status === 401 || res.status === 403) {
+      return FAIL(name, `key rejected (HTTP ${res.status}) — revoked or mistyped`,
+        "https://aistudio.google.com/apikey");
+    }
+    return OK(name, "Gemini authenticates; generated art is live");
+  } catch (e) {
+    return WARN(name, `could not reach the API: ${String(e).slice(0, 60)}`);
+  }
+}
+
 /** Is the RPC reachable, and is it one that can actually compete? */
 async function checkRpc(cfg: Config, forMainnet: boolean): Promise<CheckResult[]> {
   const out: CheckResult[] = [];
@@ -158,6 +231,35 @@ async function checkWallet(cfg: Config): Promise<CheckResult[]> {
   return out;
 }
 
+/**
+ * Which enabled feeds cannot actually poll.
+ *
+ * A feed with a missing credential stays `enabled: true` in config and fails
+ * `readiness()` on every tick, logging one line nobody reads. Reddit and
+ * Farcaster sat dead this way long enough to starve two of the five
+ * independence families that corroboration is scored on, while preflight
+ * reported all green -- it only ever checked launch-path credentials.
+ */
+const FEED_SIGNUP: Record<string, string> = {
+  reddit: "https://www.reddit.com/prefs/apps",
+  farcaster: "https://neynar.com/",
+  xApi: "https://developer.x.com/en/portal/dashboard",
+};
+
+function checkFeeds(ctx: FeedContext): CheckResult[] {
+  const feeds = enabledFeeds(ctx.cfg);
+  const dead: CheckResult[] = [];
+
+  for (const { adapter } of feeds) {
+    const ready = adapter.readiness(ctx);
+    if (ready.ready) continue;
+    dead.push(WARN(`Feed: ${adapter.id}`,
+      `enabled but cannot poll — ${ready.reason}`, FEED_SIGNUP[adapter.id]));
+  }
+
+  return dead.length ? dead : [OK("Feeds", `all ${feeds.length} enabled feeds can poll`)];
+}
+
 /** Config combinations that decide how much can be lost. */
 function checkPosture(db: Db, cfg: Config): CheckResult[] {
   const out: CheckResult[] = [];
@@ -196,10 +298,13 @@ function checkPosture(db: Db, cfg: Config): CheckResult[] {
  *                    whether you are ready, because startup refuses mainnet
  *                    until the very keys you are checking for are present.
  */
-export async function runPreflight(db: Db, cfg: Config, forMainnet = false): Promise<CheckResult[]> {
-  const [anthropic, pinata, rpc, wallet] = await Promise.all([
+export async function runPreflight(
+  db: Db, cfg: Config, ctx: FeedContext, forMainnet = false,
+): Promise<CheckResult[]> {
+  const [anthropic, pinata, gemini, rpc, wallet] = await Promise.all([
     checkAnthropic(cfg, forMainnet),
     checkPinata(cfg, forMainnet),
+    checkImageGenerator(cfg),
     checkRpc(cfg, forMainnet),
     checkWallet(cfg),
   ]);
@@ -208,7 +313,7 @@ export async function runPreflight(db: Db, cfg: Config, forMainnet = false): Pro
     posture.unshift(WARN("Target",
       `judging readiness for MAINNET while config says ${cfg.network}`));
   }
-  return [...posture, anthropic, pinata, ...rpc, ...wallet];
+  return [...posture, anthropic, pinata, gemini, ...rpc, ...wallet, ...checkFeeds(ctx)];
 }
 
 export const SETUP_LINKS = `
@@ -220,6 +325,18 @@ export const SETUP_LINKS = `
                       Free tier is enough. pump.fun's own IPFS endpoint is
                       deprecated, so metadata must be pinned externally.
                       Pricing: https://pinata.cloud/pricing
+
+  Image generator     Only needed if assets.image.provider is not "local" --
+                      the local SVG templates work with no credential at all.
+
+                      Cloudflare Workers AI (free, recommended):
+                        https://dash.cloudflare.com/profile/api-tokens
+                        Create a Custom token with Account > Workers AI > Read.
+                        Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN.
+                        10,000 neurons/day free; one image is ~50-150.
+
+                      Gemini (paid, no free image tier):
+                        https://aistudio.google.com/apikey
 
   Dedicated RPC       https://dashboard.helius.dev/signup
                       https://www.quicknode.com/chains/sol

@@ -192,3 +192,44 @@ describe("experimentalWindow — the 24h boost that self-expires", () => {
     assert.ok(TUNABLE.find((b) => b.path === "scoring.threshold"));
   });
 });
+
+// ==================================================================
+// effectiveRisk() REPLACES the static value rather than taking the max of the
+// two. That is fine while a window is more permissive than config -- which is
+// the only case it was designed for -- but it means raising a static risk
+// number while a window is open has no effect until the window expires, and
+// if the window's number is LOWER, the "widen activity" tool quietly narrows
+// it instead.
+//
+// This bit for real: maxHoldMinutes went to 24h with static
+// maxConcurrentPositions raised 1 -> 10, while a live window pinned 3. Three
+// positions would have opened and launches would have stopped for a day, with
+// nothing in the logs naming the cause. See DECISIONS #37.
+// ==================================================================
+
+describe("a window can override a static value downward", () => {
+  let db: Db;
+  beforeEach(() => { db = openMemoryDb(); });
+
+  test("replace-not-max is the actual behaviour, and is pinned here", () => {
+    const c = cfg({ risk: { maxConcurrentPositions: 10 } });
+    open(db, { maxConcurrentPositions: 3 });
+    assert.equal(effectiveRisk(db, c).maxConcurrentPositions, 3,
+      "window replaces static -- if this ever becomes max(), update DECISIONS #37");
+  });
+
+  test("the static value returns intact once the window is cleared", () => {
+    const c = cfg({ risk: { maxConcurrentPositions: 10 } });
+    open(db, { maxConcurrentPositions: 3 });
+    clearExperimentalWindow(db, "test");
+    assert.equal(effectiveRisk(db, c).maxConcurrentPositions, 10);
+  });
+
+  test("the ceiling is not below what a deployment may statically configure", () => {
+    // A ceiling under the static baseline turns every window into a
+    // throttle. Keeping this >= 10 is what makes the 24h-hold config
+    // expressible inside a window at all.
+    assert.ok(EXPERIMENTAL_CEILINGS.maxConcurrentPositions >= 10,
+      "ceiling must be able to express the 24h-hold concurrency baseline");
+  });
+});

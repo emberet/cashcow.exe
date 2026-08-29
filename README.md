@@ -112,7 +112,7 @@ it. The public page shows launches only after they exist on chain.
 **The gate funnel is the headline.** "The chomp pipeline" shows where every
 rumour died — sniffed, deduped, warmed, scored, screened, crowded out, priced
 out, launched. Aggregate counts publish live; the *named* rejection list is held
-back by `web.declineDelayHours` (default 6), so reading the page can never
+back by `web.declineDelayMinutes` (default 5), so reading the page can never
 front-run a launch. Gate counts are measured against what was actually
 **examined**, not what was scored — the loop stops looking once the allowance is
 gone, and reporting the remainder as rejections would flatter the filters.

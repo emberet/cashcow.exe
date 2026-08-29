@@ -10,7 +10,7 @@ import { validate, applyChanges, boundFor, FORBIDDEN_PREFIXES } from "../src/lea
 import { sanitise, writeOverlay, readOverlay, clearOverlay } from "../src/learning/overlay.ts";
 import { computeCapacity, costPerLaunch, balanceNeededFor, newsVolumeScale } from "../src/risk/capacity.ts";
 import { BudgetGuard } from "../src/risk/budget.ts";
-import { recordLaunch, outcomeSummary } from "../src/learning/outcomes.ts";
+import { recordLaunch, outcomeSummary, settledOutcomes } from "../src/learning/outcomes.ts";
 import { corroborationStrength, distinctFamilies, familyOf } from "../src/scoring/independence.ts";
 
 const cfg = (over: Record<string, unknown> = {}) => configSchema.parse({ dryRun: false, ...over });
@@ -446,5 +446,41 @@ describe("outcome recording", () => {
     assert.equal(o.pending, 1);
     assert.equal(o.settled, 0, "a fresh launch has not succeeded or failed yet");
     assert.equal(o.hitRate, null, "no hit rate from zero settled launches");
+  });
+
+  // peak_volume_h24_usd (v9 migration, src/util/db.ts): DexScreener-sourced,
+  // tracked the same running-max way as peak_mcap_usd, but observational
+  // only -- classify() still verdicts on peak mcap alone. This only checks
+  // the column exists, is nullable, and round-trips through settledOutcomes()
+  // correctly; refreshOutcomes() itself calls the network (fetchDexActivity)
+  // and is not exercised here, consistent with the rest of this file not
+  // hitting real network endpoints.
+  test("peak_volume_h24_usd round-trips through settledOutcomes as peakVolumeH24Usd", () => {
+    const db = openMemoryDb();
+    recordLaunch(db, {
+      mint: "M2", term: "vol test", symbol: "VOLT", score: 50,
+      components: {}, feeds: ["onchain"], families: ["crypto"],
+      namingSource: "model", entrySol: 0.05, dryRun: false,
+    });
+    db.prepare(
+      `UPDATE launch_outcomes SET verdict = 'dud', peak_volume_h24_usd = ? WHERE mint = ?`,
+    ).run(41234.5, "M2");
+
+    const rows = settledOutcomes(db, cfg());
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.peakVolumeH24Usd, 41234.5);
+  });
+
+  test("peak_volume_h24_usd defaults to null and reads back as 0, not NaN", () => {
+    const db = openMemoryDb();
+    recordLaunch(db, {
+      mint: "M3", term: "no volume yet", symbol: "NOVOL", score: 50,
+      components: {}, feeds: ["onchain"], families: ["crypto"],
+      namingSource: "model", entrySol: 0.05, dryRun: false,
+    });
+    db.prepare(`UPDATE launch_outcomes SET verdict = 'dud' WHERE mint = ?`).run("M3");
+
+    const rows = settledOutcomes(db, cfg());
+    assert.equal(rows[0]!.peakVolumeH24Usd, 0);
   });
 });

@@ -19,6 +19,16 @@ export type TokenIdentity = {
   name: string;
   symbol: string;
   description: string;
+  /**
+   * The description WITHOUT the appended provenance line.
+   *
+   * `description` is what gets published in the token metadata, and since
+   * provenance was added it ends with "Auto-launched from the trend ...
+   * Score 71/100 ...". That sentence is useful to a human reading the coin
+   * page and actively harmful as input to an image model, which will try to
+   * draw the words. Anything generating artwork must read this field.
+   */
+  creativeDescription?: string;
   source: "model" | "fallback";
   /**
    * Set when the model judges the underlying trend to be a real brand, product
@@ -88,7 +98,11 @@ export async function generateIdentity(
     try {
       const identity = await callClaude(cfg, candidate, apiKey);
       const check = checkAll([identity.name, identity.symbol, identity.description], f);
-      if (check.allowed) return identity;
+      // Provenance is appended AFTER the filter check on purpose: it is built
+      // from `candidate.term`, which already cleared checkTerm() upstream in
+      // runner/loop.ts, plus feed ids and numbers. Running the filters over it
+      // again would only risk rejecting an already-vetted term twice.
+      if (check.allowed) return withProvenance(identity, candidate, cfg);
       log.warn("generated identity rejected by filters, using fallback", {
         term: candidate.term,
         reason: check.reason,
@@ -102,7 +116,43 @@ export async function generateIdentity(
     log.debug("no naming API key set, using deterministic fallback", { env: a.apiKeyEnv });
   }
 
-  return fallbackIdentity(cfg, candidate);
+  return withProvenance(fallbackIdentity(cfg, candidate), candidate, cfg);
+}
+
+/**
+ * The one-line "why this coin exists" that gets published with the token.
+ *
+ * Every launch before this shipped a description that was either a model
+ * joke or the words "X trending on fourchan." -- neither of which tells a
+ * reader what real-world thing the coin refers to or why a bot thought it
+ * was worth minting. Exported for testing.
+ */
+export function provenanceLine(candidate: Candidate): string {
+  const sources = candidate.feeds.join(" + ");
+  return (
+    `Auto-launched from the trend "${candidate.term}" ` +
+    `detected on ${sources}. ` +
+    `Score ${Math.round(candidate.score)}/100 across ${candidate.observations} ` +
+    `sightings; ${candidate.corroborationNote}.`
+  );
+}
+
+/** Appends `provenanceLine()` to a description, bounded by config. */
+export function withProvenance(
+  identity: TokenIdentity, candidate: Candidate, cfg: Config,
+): TokenIdentity {
+  const a = cfg.assets.naming;
+  // Always preserve the creative half separately, even when provenance is
+  // off, so downstream consumers can rely on the field always being there.
+  const creativeDescription = identity.description;
+  if (!a.includeProvenance) return { ...identity, creativeDescription };
+
+  const combined = `${identity.description} ${provenanceLine(candidate)}`.trim();
+  return {
+    ...identity,
+    creativeDescription,
+    description: combined.slice(0, a.maxTotalDescriptionLength),
+  };
 }
 
 async function callClaude(

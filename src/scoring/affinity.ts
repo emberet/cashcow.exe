@@ -44,6 +44,13 @@ const DRY = new Set([
   "lawsuit", "settlement", "merger", "acquisition", "ipo", "dividend",
   "unemployment", "mortgage", "insurance", "medicare", "tariff", "budget",
   "weather", "forecast", "traffic", "recall", "advisory", "schedule",
+  // Added from real dud evidence: every one of these launched on mainnet and
+  // never traded past its own dev buy (launch_outcomes, 2026-08). Generic
+  // finance jargon, pharma-approval headlines, and bare place names all read
+  // as news to a feed but carry no hook anyone would buy a token for.
+  "momentum", "spread",
+  "drug", "fda", "cancer",
+  "maryland", "canada",
 ]);
 
 export function cryptoAffinity(term: string, feeds: Iterable<string>): number {

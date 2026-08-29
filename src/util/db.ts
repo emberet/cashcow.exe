@@ -297,6 +297,26 @@ const MIGRATIONS: string[] = [
   `
   CREATE INDEX idx_signals_dedupe ON signals(feed, source_text, ingested_at);
   `,
+
+  // v9 -- track ongoing DexScreener trading volume alongside the existing
+  // peak-mcap tracking. `classify()` (src/learning/outcomes.ts) still verdicts
+  // on peak market cap alone -- this column is observational only, recorded
+  // so a volume-based signal can be evaluated later against real data instead
+  // of guessed at. Same running-max pattern as peak_mcap_usd: refreshOutcomes()
+  // keeps the highest 24h volume seen across every check, not the latest.
+  `
+  ALTER TABLE launch_outcomes ADD COLUMN peak_volume_h24_usd REAL;
+  `,
+
+  // v10 -- carry the trend's own originating source link (an X post, a news
+  // article, whatever `signals.url` first captured for the term) through to
+  // the launch itself, so the dashboard can show what real-world thing a
+  // coin is about, not just its name. `Candidate.sampleUrl` already existed
+  // (src/scoring/score.ts) and was already sanitized once at signal-ingest
+  // time, but launchCandidate() discarded it rather than persisting it.
+  `
+  ALTER TABLE launches ADD COLUMN source_url TEXT;
+  `,
 ];
 
 /**

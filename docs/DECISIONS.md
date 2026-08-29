@@ -227,7 +227,7 @@ it is the whole "where did the day go" story. But a live feed of *which* terms
 were just rejected still reveals what the bot is looking at right now.
 
 **Decision.** Aggregate funnel counts publish live; the named decline list is
-held back by `web.declineDelayHours` (default 6). The admin portal sees both
+held back by `web.declineDelayMinutes` (default 5). The admin portal sees both
 immediately, since there is nothing to front-run yourself.
 
 **A bug this caused, and the rule it produced.** The "right now" banner
@@ -965,3 +965,398 @@ defect was found by rendering the page and measuring the icons.
 version is derived from real file bytes, that no asset referenced by a page is
 missing from `VERSIONED_ASSETS`, and that both social icons carry explicit
 dimensions. The last one was verified to fail against the pre-fix markup.
+
+---
+
+## 33. `bigint-buffer`'s unpatched CVE: traced, reachable, and accepted
+
+**Context.** An external code review flagged `npm audit`'s HIGH-severity
+finding for `bigint-buffer` (GHSA-3gc7-fjrx-p6mg, a buffer over-read in
+`toBigIntLE()`, CVSS 7.5, `AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H` — availability
+only, no confidentiality or integrity impact). `npm audit`'s suggested fix is
+a semver-major downgrade of `@solana/spl-token` to `0.1.8`, which this repo
+cannot use (it needs 0.4.x's API) — not a real fix, so this needed an actual
+reachability trace rather than a blind bump or a shrug.
+
+**Where it actually sits.** Nothing in `src/` imports `bigint-buffer` or
+`@solana/buffer-layout-utils` directly — `src/chain/trade.ts` only pulls
+`getAssociatedTokenAddressSync` and `TOKEN_PROGRAM_ID` from
+`@solana/spl-token`, pure address derivation, no account-data decoding. The
+vulnerable function is reached one layer down: `@pump-fun/pump-sdk` depends on
+`@pump-fun/pump-swap-sdk`, whose `getCoinCreatorVaultBalance()` calls
+`@solana/spl-token`'s `getAccount()` to read the pump-AMM creator-fee vault
+token account — `unpackAccount` decodes its `amount` field via
+`@solana/buffer-layout-utils`'s `u64` layout, which calls `bigint-buffer`'s
+`toBigIntLE()`. `src/chain/fees.ts`'s `creatorVaultBalanceSol()` calls
+`getCreatorVaultBalanceBothPrograms()`, which calls that function — so this
+codebase's fee-checking path does reach the vulnerable code, confirmed by
+reading `node_modules/@pump-fun/pump-swap-sdk/dist/index.js` directly, not
+inferred from the dependency graph alone.
+
+**Why it's accepted rather than mitigated.** The overflow condition needs a
+buffer shorter than the field width the decoder expects. The account being
+decoded (`coinCreatorVaultAta`) is a real SPL Token account, created and
+sized by the SPL Token program itself (always exactly `ACCOUNT_LEN` = 165
+bytes) and owned by a PDA the pump-AMM program controls — not free-form data
+an attacker can shape or resize. Reaching the vulnerable code path is
+confirmed; reaching the *vulnerable input shape* through it is not something
+an external party controls here. Combined with the CVSS vector being
+availability-only (a crash, not data exposure or corruption) on a read that
+is already wrapped in try/catch (`getCoinCreatorVaultBalance` catches and
+returns zero on any error), the worst case is a swallowed exception on a fee
+check, not a security breach.
+
+**What would change this.** A patched `bigint-buffer` release, or
+`@solana/spl-token` dropping the dependency — re-run `npm audit` after any
+`@solana/spl-token`/`@pump-fun/*` upgrade and revisit this entry if the
+finding disappears or the reachability picture changes. Not tracked as a
+recurring TODO because there is nothing actionable to do differently today;
+this entry is the record that it was investigated, not deferred by default.
+
+---
+
+## 34. Three feeds were dead, and corroboration silently went to zero
+
+**Symptom.** `npm run score` against the live mainnet DB: 801 candidates, **0
+above threshold**, and every single one scoring `corr 0.00`. Not one candidate
+in the entire pool had corroboration from a second independent family.
+
+**Why.** `corroborationStrength()` (`src/scoring/independence.ts`) scores on
+distinct *families*, and three of the five had gone dark without anything
+saying so:
+
+- `reddit` (weight 1.0, family `forum`) — `REDDIT_CLIENT_ID`/`_SECRET` absent
+  from `.env`, leaving `hackernews` alone in `forum`.
+- `farcaster` (weight 0.9, family `crypto`) — `NEYNAR_API_KEY` absent.
+- `xApi` (weight 1.2, the highest-weighted feed, sole member of `social`) —
+  the $25/month API meter was exhausted, so `readiness()` refused every poll.
+
+All three stay `enabled: true` in config forever. `pollAll()` logs one
+`"feed skipped"` line per poll and carries on — correct behaviour in
+isolation (invariant: a dead feed degrades, never crashes), but it means the
+failure mode of "half the independence families no longer exist" looks
+identical to a quiet news day. `npm run preflight` did not catch it either:
+it only checked launch-path credentials (Anthropic, Pinata, RPC, wallet),
+never feed ones, so it reported all-green throughout.
+
+The consequence shows up in the outcome record. All 12 settled live launches
+came from exactly **one feed and one family each** — the bot has never
+launched a cross-family-corroborated candidate, because since these feeds
+died it structurally could not. 11 of those 12 are duds. `docs/DECISIONS.md`
+§5 had already noted, from a much smaller sample, that "all three duds came
+from single-source signals and all three hits came from cross-family pairs";
+this is that hypothesis getting a much less ambiguous data point.
+
+**Fix.** `checkFeeds()` in `src/cli/preflight.ts` calls each enabled feed's
+own `readiness()` and reports the ones that cannot poll, with the signup link
+for the missing credential. Reusing `readiness()` rather than re-testing env
+vars means a feed that is present-but-rejected (X's exhausted meter) surfaces
+the same way a missing key does — which is the case that would otherwise have
+stayed invisible, since the token *is* set.
+
+**Deliberately not done.** No change to `scoring.weights`, `threshold`, or
+the corroboration formula. A 12-sample, 11-dud record cannot distinguish "the
+weights are wrong" from "three feeds were off" — and the second explanation
+is now known to be true. Re-tuning against that evidence would be fitting
+noise generated by an operational outage. The tuner exists to make exactly
+this call and is gated at 20 settled samples (`learning.minSampleSize`); it
+should make it once the feeds are back and the sample is honest.
+
+---
+
+## 35. Real AI art, deliberately reversing an earlier decision
+
+**The earlier decision.** `assets/image.ts`'s own module doc used to argue
+against a generator API outright: "most launches earn nothing... paying an
+image-generation API on every candidate would reliably cost more than the
+launches return." That reasoning was sound at the time and is not being
+disputed here — it is being knowingly overridden. Real per-image art
+(Gemini's "Nano Banana" line) is now wired in as the preferred path, with
+the original local SVG templates kept as the automatic fallback rather than
+removed.
+
+**Why keep the fallback rather than require Gemini.** The naming model
+(`assets/naming.ts`'s `generateIdentity()`) already established the pattern
+this follows: a model call that can fail should never be the reason a launch
+aborts, because by the time artwork is being generated the naming call has
+already run and been paid for — throwing the candidate away over an image
+failure wastes real, already-spent money on top of losing the candidate. So
+`renderTokenImage()` tries Gemini and falls through to the untouched local
+renderer on *any* failure — missing key, exhausted monthly cap, timeout,
+malformed response, or a content-safety rejection — logged, never thrown.
+
+**Cost is real and deliberately isolated.** Gemini image spend is metered
+through its own USD meter key (`gemini-image-usd`), completely separate from
+every other metered spend in this repo (`x-api-usd` for feed reads,
+`x-announce-usd` for X posts) — one budget must never silently starve
+another, the same reasoning `social.xAnnounce`'s config comment already
+gives for its own separate meter.
+
+**Model choice.** Three current tiers exist (`gemini-3-pro-image`,
+`gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`), priced roughly
+4x apart between cheapest and most expensive. Defaults to the cheapest
+(`gemini-3.1-flash-lite-image`) given this bot's own wallet is already thin
+and this is a new *recurring* cost layered on top of an already-costly
+pipeline (create + dev buy + IPFS pin), not a one-off.
+
+**Deliberately not done.** `theme.ts`'s free, local, keyword-based style
+selection (`themeOf()`) was kept rather than replaced with a model call for
+*style* too — its own docblock already explains why a model call was
+rejected for that specific decision (cosmetic-only, must never fail a
+launch), and that reasoning still holds. Its output now feeds the Gemini
+*prompt* instead of picking a local template directly, so the one thing this
+repo already got right about theme selection is reused, not discarded.
+
+---
+
+## 36. The image generator is Cloudflare, and its output is never trusted
+
+**What changed.** §35 wired in an image generator but hard-coded it to
+Gemini, which needs a Google API key with billing attached — unobtainable
+here, so in practice *every* launch silently fell back to the local SVG
+templates and the feature never once ran. `assets.image.provider` is now the
+switch (`local` | `cloudflare` | `gemini`), defaulting to `local`.
+
+**Why Cloudflare.** 10,000 neurons/day free with no billing setup.
+Measured against the live API, FLUX.1 [schnell] bills 172.8 neurons per
+image — about 57 images a day free, against a launch rate of 3–10. That matters beyond
+convenience: this file's *original* objection to calling a generator at all
+was per-launch cost against launches that mostly earn nothing (§1). A free
+provider answers that objection directly rather than overriding it.
+
+**The part worth remembering: never pin what a provider hands back.**
+`flux-1-schnell` accepts no width or height argument. pump.fun states a
+1000×1000 minimum, and this repo has already shipped art *under* that floor
+once — `schema.ts` still carries the comment recording the 512×512 bug. So
+every generated image is resized locally through `sharp` (already a
+dependency, already used by the local templates) before it leaves
+`image.ts`. This is not defensive tidying; it is the only thing standing
+between a provider's native output and an undersized coin face, and it makes
+swapping providers safe when the next one emits some other size.
+
+Two consequences fall out of it: `RenderedImage.contentType` is always
+`image/png` again, because the re-encode removes any chance of a provider's
+JPEG reaching a caller; and a test now decodes the PNG and asserts its pixel
+dimensions. Nothing in the suite did that before, which is precisely how the
+512×512 bug shipped in the first place.
+
+**Deliberately not done.** The Gemini path was kept rather than deleted — it
+is written and tested, and is the obvious upgrade if paid art is ever wanted.
+It is still flagged in-code as never having made a live call. The meter is now
+provider-agnostic (`image-gen-usd`) and charges nothing on a free provider,
+so the budget rail is already in place the day a paid one is selected.
+
+**What the live API actually did, versus its docs.** Three things only a real
+call surfaced, all of which would have failed silently:
+
+- `seed` is documented as a *required* parameter. The live endpoint rejects
+  it — `HTTP 400, "Additional or unevaluated properties '/seed' at '/' not
+  allowed"`. Sending it made every request fail, and because generation
+  falls back to local art on any error, the feature would have appeared to
+  work while never once generating anything.
+- The response is a **JPEG**, not the PNG the docs imply.
+- It is 1024×1024, with no parameter to change it.
+
+The last two were already handled by the mandatory re-encode/resize, which is
+the argument for having written it that way rather than trusting the provider.
+The first was a real bug, caught only because the endpoint was exercised for
+real before being trusted.
+
+## 37. The rug flag was earned, and the fix is the boring one
+
+Solflare showed three warnings on every bot-launched coin. Two were bugs. The
+third was the wallet telling the truth about itself.
+
+**"Creator has a history of rugging tokens" (red).** Not a false positive. The
+creator wallet minted a coin, bought 0.05 SOL of it, and sold its *entire*
+position at ~30.1 minutes — eighteen times, near-identically. That is
+`devPosition.exit.maxHoldMinutes: 30` doing exactly what it was configured to
+do, and it is also the textbook rug fingerprint. A heuristic looking for
+"creator mints, pumps, dumps everything, on a timer" cannot tell the
+difference between that and the real thing, because at the level of on-chain
+behaviour there isn't one.
+
+It compounds in the worst direction: the flag attaches to the *wallet*, so
+every future launch inherits a red warning, which works directly against the
+discoverability problem several recent changes were aimed at.
+
+The economics settled it. Across 18 positions the dev bag earned **+0.158
+SOL**; creator fees over the same period earned **0.643 SOL**. The secondary
+strategy was damaging the primary one — and §1's whole argument is that fees,
+not the dev position, are the revenue model.
+
+So: `maxHoldMinutes` 30 → 1440.
+
+**The coupling that would have silently broken this.**
+`risk.maxConcurrentPositions` was **1**. Holding a position for 24h means the
+bot cannot open a second one for 24h, so raising the hold time *alone* would
+have stopped launches after the first one each day — with no error, no alert,
+and a plausible-looking "no candidate qualified" in the logs. Raised to 10 in
+the same change, which locks ~0.5 SOL (10 × 0.05) against a ~1.19 SOL wallet.
+`assertCoherent()` is the backstop if those numbers ever stop adding up.
+
+Both keys are `risk.*`/`devPosition.*`, so this is a permanent config edit and
+not a `boost-window`: the window cannot reach `devPosition.*` at all, by
+design (see the Gotchas entry). Worth knowing that an active window *does*
+override `maxConcurrentPositions` while it runs — `effectiveRisk()` replaces
+rather than maxes — so a stale window pinning 3 would quietly cap the new 10.
+
+**Stated honestly: this softens the pattern, it does not erase it.** A creator
+that sells 100% of its bag 24 hours later is still a creator that sells
+everything. If the flag persists, turning `devPosition.enabled` off is the
+change that actually removes the signature, and by the numbers above it costs
+almost nothing.
+
+**Deliberately not done: rotating the creator wallet per launch.** That is the
+obvious way to make the flag disappear, it would work, and it is precisely the
+"multi-wallet bundling ... to conceal dev ownership" that §2 excludes by name.
+The warning exists to let a buyer see who they are buying from; evading it by
+changing identity is not a fix, it is the thing the warning is for. The flag
+goes away by behaving differently, or it stays.
+
+**"Missing file metadata" (amber) — a real bug.** Fetching a live launched
+token's pinned JSON showed `name`, `symbol`, `description`, `image`,
+`showName`, `createdOn` — and no `properties.files`. That is the Metaplex
+descriptor wallets read to associate a file with a token. pump.fun itself
+never needed it, so it was never written. Added, additively; every existing
+field is untouched.
+
+**"Unverified token" (amber).** Partly generic to all pump.fun coins, but
+bot-launched tokens carried **zero social links** while the hand-launched
+project token had them. `pinTokenMetadata()` has accepted `twitter`/
+`telegram`/`website` since it was written and the one call site passed none.
+Now wired to a `social.project` config block. This does not make a token
+"verified" — that needs an external listing — but it removes the
+no-information-at-all shape, and gives a reader somewhere to go.
+
+## 38. Every coin looked the same, and the theme system was the reason
+
+Twenty of twenty real launches rendered in one visual style. This was
+measured, not eyeballed: `themeOf()` returned `monogram` for **100%** of them.
+Terms like "Panthers", "Detroit", "Trips" and "CIGR" match neither the AI
+keyword list nor the politics one, so everything landed on the fallback, and
+the fallback appended one fixed string to every prompt.
+
+The system was not broken — it was being used outside its design. `themeOf()`
+was built to choose between three *local templates*, where three coarse
+buckets is the right resolution. Driving generative art with it means the
+prompt has exactly three possible values, and in practice one.
+
+Kept `themeOf()`: it is free, local, and correct when it does match. Stopped
+it being the *only* input. Each theme now holds a pool of genuinely distinct
+art directions — different media and moods (cinematic photoreal, engraved
+plate, oil painting, 3D render, risograph, neon synthwave, storybook,
+brutalist poster), not eight rewordings of "ornate seal" — and the per-coin
+pick is `hash(identity.symbol) % pool.length`. The `monogram` pool is the
+largest because it is ~100% of real traffic.
+
+This also restores something lost in §36. The Cloudflare endpoint rejects
+`seed`, so there is no provider-side determinism available; keying the art
+direction off the ticker puts reproducibility back in the *prompt*, which is
+the one input we control. Same ticker, same art direction, every time.
+
+**The tests are the point.** Three assertions that the previous code would
+have failed: real launch tickers produce more than one style (20/20 identical
+fails this), the same symbol always maps to the same style, and every pool
+entry is reachable. The last one matters because a hash that collapses onto a
+few buckets is the same bug wearing a hat.
+
+## 39. A zero balance is not a loss: 0.0975 SOL that never happened
+
+Routine maintenance turned up two positions closed as `no_balance` with a full
+`-0.05` write-off each. Both were wrong, and the ledger already knew it.
+
+`SMG` and `FTFS` each had a `dev_sell` row of **+0.04874043 SOL** with a real
+signature, and both signatures fetch from mainnet with `err: null`. The sales
+landed. The positions table recorded `exit_sol 0` and a total loss anyway.
+
+**How it happened.** `sellAll()` reads the live token balance and returns early
+when it is zero — correct in isolation. The exit path then read that zero as
+"the tokens never came back, write it off." The actual sequence was:
+
+```
+23:14:24  exit failed -- "Signature ... has expired: block height exceeded"
+23:14:25  exit failed -- AnchorError NotEnoughTokensToSell (0x1787)
+23:14:25  exit failed -- NotEnoughTokensToSell
+23:14:35  position had no token balance, closed   -> booked -0.05
+```
+
+The first attempt **did land**; the client just stopped waiting for it.
+"Blockhash expired" means the confirmation timed out, not that the transaction
+failed. Every later attempt was then correctly told there were no tokens left
+to sell, and the final balance read of zero was the aftermath of a *successful*
+sale being mistaken for a failed one.
+
+**Why it mattered beyond the ledger being wrong.** Realized loss feeds
+`maxDailyLossSol`, which is a breaker that stops launches. Two phantom losses
+of 0.0487 each is 0.0975 SOL of fiction charged against a 0.2 SOL daily loss
+budget — nearly half of it — and the same wrong numbers are what
+`launch_outcomes` hands the tuner to learn from. A bug that invents losses is
+strictly worse than one that hides them: it makes the safety rails fire early,
+on nothing.
+
+**The fix.** `recoveredSolFromLedger()` asks the spend ledger whether a
+`dev_sell` for this mint landed after the position opened, and the exit path
+consults it before writing anything off. The ledger is the right authority:
+every real sale records a measured row through the same single choke point
+invariant 1 puts on spending, so if the money came back it is there. Scoped by
+mint, by `opened_at` (an earlier position's proceeds must not pay off a later
+one), and by `dry_run` (the pretend ledger can never credit a real position).
+
+A close with proceeds now reads `sold_before_retry` rather than `no_balance`,
+so the two cases stop being indistinguishable in the data. A genuine total
+loss — no sale on record — still books as `no_balance` at `-entry_sol`.
+
+The two live rows were corrected against their on-chain signatures. Realized
+P&L across closed positions moved from +0.1049 to **+0.20235 SOL**; the
+difference is entirely loss that never occurred.
+
+**Checked and clean:** the six launches that failed the same way
+(`TransactionExpiredBlockheightExceededError`) genuinely never landed — all
+six signatures are absent from mainnet. No orphaned mints, no spent SOL
+without a position. Failed launches also do not consume the daily cap, since
+`launchesLast24h()` counts ledger rows and those are only written after a
+launch settles. The exposure was specific to the exit path.
+
+## 40. The person-name screen was wrong in both directions
+
+Maintenance found the brand/likeness heuristic misfiring both ways in one day
+of real logs. The asymmetry is the whole design — a false positive costs a
+duller token name, a false negative is a right-of-publicity claim — so the two
+halves are not equally urgent, but both were real.
+
+**False positives: 7 in a day.** `"Tiger Rally"`, `"Brazilian Vibes"`,
+`"Now You"`, `"Networth Until"` were all rejected as person names. They are
+title-cased sentence fragments the phrase extractor happened to capitalise.
+Each rejection forces fallback naming, which is how launches ended up with
+tickers like `NETWORTH` and `FLEX` — directly against the goal of the last
+several changes.
+
+Fixed the way the list was already designed to be fixed: `NOT_A_PERSON`
+already carried `"the"`, `"of"`, `"and"`, `"for"`, so it was extended with the
+function words that actually appeared (`now`, `you`, `until`, `what`, `who`
+…) and with market/meme vocabulary (`vibes`, `rally`, `pump`, `chart`,
+`flex` …). Words that *are* real names — Wave, Storm, Winter, Summer, Rich,
+Young — were deliberately left out, because that is the expensive direction.
+
+**A false negative, found while fixing the above.** The per-word test was:
+
+```
+/^[A-Z][a-z'-]{1,}$/
+```
+
+with a comment directly above it reading *"allowing O'Brien, Al-Hassan"*. The
+character class has no uppercase in it. The `B` in `O'Brien` failed the test,
+`looksLikePersonName()` returned false, and the whole name was declared not a
+person — so **every apostrophe and hyphen name was silently exempt from the
+screen**. The code did the opposite of its own comment, and in the direction
+the config comment calls the costly one.
+
+Now `/^[A-Z][a-z]*(?:['-][A-Z]?[a-z]+)*$/`: an uppercase letter is allowed
+only immediately after an apostrophe or hyphen, so `O'Brien`, `Al-Hassan`,
+`Jean-Luc` and `D'Angelo` are screened while acronyms like `NFL` and `US`
+still fail and are not mistaken for people.
+
+Nothing in the suite exercised this function at all, which is how a regex that
+contradicted its own comment survived. `test/person-name.test.ts` now covers
+both directions, including the specific strings from the logs.

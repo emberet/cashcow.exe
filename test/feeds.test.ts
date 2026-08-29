@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { curveProgress } from "../src/feeds/onchain.ts";
 import { organicBuyPressure, type OrganicFlowThresholds } from "../src/scoring/organicFlow.ts";
+import { configSchema } from "../src/config/schema.ts";
 
 describe("curveProgress — bonding-curve-graduation approximation (onchain.ts)", () => {
   test("graduated coins are always 0, regardless of market cap", () => {
@@ -136,5 +137,48 @@ describe("organicBuyPressure — organic buy-side imbalance (dexActivity.ts)", (
       const score = organicBuyPressure(input, T);
       assert.ok(score >= 0 && score <= 1, `score ${score} out of [0,1] for ${JSON.stringify(input)}`);
     }
+  });
+});
+
+// The band above is a local fixture; these read the SHIPPED defaults, so
+// reverting the schema fails here rather than silently un-calibrating the feed.
+describe("dexActivity ships calibrated against where real graduated coins sit", () => {
+  const shipped = configSchema.parse({}).feeds.dexActivity;
+  const T: OrganicFlowThresholds = {
+    minLiquidityUsd: shipped.minLiquidityUsd,
+    minBuyShareForSignal: shipped.minBuyShareForSignal,
+    maxBuyShareForSignal: shipped.maxBuyShareForSignal,
+    maxWashSuspicionScore: shipped.maxWashSuspicionScore,
+  };
+
+  test("the feed is enabled", () => {
+    assert.equal(shipped.enabled, true);
+  });
+
+  // 25 real graduated coins (2026-08-27) put freshly-migrated tokens at 86-98%
+  // buy share. The old 85 ceiling scored that entire population 0 -- the feed
+  // was blind to exactly what it exists to detect.
+  test("90% buy share -- squarely in the real migrated-token cluster -- now scores positive", () => {
+    const score = organicBuyPressure(
+      { buys24h: 900, sells24h: 100, liquidityUsd: 100_000, txCount24h: 1000, replyCount: 500 },
+      T,
+    );
+    assert.ok(score > 0, `expected a positive score at 90% buy share, got ${score}`);
+  });
+
+  test("a near-total 99% stampede is still rejected -- the ceiling moved, it did not disappear", () => {
+    const score = organicBuyPressure(
+      { buys24h: 990, sells24h: 10, liquidityUsd: 100_000, txCount24h: 1000, replyCount: 500 },
+      T,
+    );
+    assert.equal(score, 0);
+  });
+
+  test("the wash dampener still fires inside the widened band", () => {
+    const score = organicBuyPressure(
+      { buys24h: 900, sells24h: 100, liquidityUsd: 100_000, txCount24h: 5000, replyCount: 5 },
+      T,
+    );
+    assert.equal(score, 0, "a wide band must not become a way around the tx/reply dampener");
   });
 });

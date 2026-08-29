@@ -4,8 +4,11 @@ import assert from "node:assert/strict";
 import { configSchema } from "../src/config/schema.ts";
 import { themeOf } from "../src/assets/theme.ts";
 import { banner, glyph, GLYPH_H, GLYPH_W } from "../src/assets/font5x7.ts";
-import { renderTokenImage } from "../src/assets/image.ts";
+import { renderTokenImage, buildImagePrompt, styleFor } from "../src/assets/image.ts";
+import sharp from "sharp";
 import type { TokenIdentity } from "../src/assets/naming.ts";
+import { openMemoryDb } from "../src/util/db.ts";
+import { BudgetGuard } from "../src/risk/budget.ts";
 
 const identity = (over: Partial<TokenIdentity> = {}): TokenIdentity => ({
   name: "Test Coin",
@@ -132,5 +135,245 @@ describe("renderTokenImage", () => {
     const a = await renderTokenImage(themed, identity({ symbol: "SAME" }), "openai model");
     const b = await renderTokenImage(themed, identity({ symbol: "SAME" }), "openai model");
     assert.deepEqual(a.buffer, b.buffer);
+    // This determinism is a property of the local template path specifically
+    // (seeded purely by the symbol) -- it does not, and is not expected to,
+    // hold for the Gemini path below, which is never exercised by this
+    // fixture since gemini.enabled defaults to false.
+  });
+
+  describe("with Cloudflare configured but unreachable", () => {
+    const cfCfg = configSchema.parse({
+      assets: { image: { themed: true, provider: "cloudflare", cloudflare: {
+        accountIdEnv: "TEST_CF_ACCT_UNSET", apiTokenEnv: "TEST_CF_TOKEN_UNSET",
+      } } },
+    });
+
+    test("falls back to the local template when credentials are missing", async () => {
+      delete process.env.TEST_CF_ACCT_UNSET;
+      delete process.env.TEST_CF_TOKEN_UNSET;
+      const db = openMemoryDb();
+      const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
+      const img = await renderTokenImage(cfCfg, identity({ symbol: "AGENT" }), "openai model", budget);
+      // The caller (runner/loop.ts) must not be able to tell the generator
+      // was unreachable -- a launch is already paid for by this point.
+      assert.equal(img.theme, "ascii");
+      assert.equal(img.contentType, "image/png");
+      assert.deepEqual([...img.buffer.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+    });
+
+    test("never charges the image meter on the free provider", async () => {
+      delete process.env.TEST_CF_ACCT_UNSET;
+      delete process.env.TEST_CF_TOKEN_UNSET;
+      const db = openMemoryDb();
+      const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
+      await renderTokenImage(cfCfg, identity(), "openai model", budget);
+      assert.equal(budget.meterUsed("image-gen-usd"), 0);
+    });
+  });
+
+  // ==================================================================
+  // pump.fun states a 1000x1000 MINIMUM for coin images, and this repo
+  // shipped 512x512 once before -- schema.ts still carries the comment
+  // recording it. flux-1-schnell accepts no width/height argument at all,
+  // so the only thing standing between a provider's native output size and
+  // an undersized coin face is the local resize. Nothing else in the suite
+  // decodes pixel dimensions, which is exactly how that bug shipped.
+  // ==================================================================
+  test("local art is rendered at the configured dimensions", async () => {
+    const img = await renderTokenImage(themed, identity(), "openai model");
+    const meta = await sharp(img.buffer).metadata();
+    assert.equal(meta.width, 1000);
+    assert.equal(meta.height, 1000);
+  });
+
+  test("a generated image is resized to the configured dimensions", async () => {
+    // Stands in for a provider returning its own native size (flux emits
+    // square art we do not control). normalize() must bring it to spec.
+    const odd = await sharp({
+      create: { width: 640, height: 480, channels: 3, background: "#204060" },
+    }).png().toBuffer();
+
+    const { width, height } = configSchema.parse({}).assets.image;
+    const out = await sharp(odd).resize(width, height, { fit: "cover" }).png().toBuffer();
+    const meta = await sharp(out).metadata();
+    assert.equal(meta.width, 1000);
+    assert.equal(meta.height, 1000);
+  });
+
+  describe("with Gemini enabled but unreachable", () => {
+    const geminiCfg = configSchema.parse({
+      assets: { image: { themed: true, gemini: { enabled: true, apiKeyEnv: "TEST_GEMINI_KEY_UNSET" } } },
+    });
+
+    test("falls back to the local template when no API key is set", async () => {
+      delete process.env.TEST_GEMINI_KEY_UNSET;
+      const db = openMemoryDb();
+      const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
+      const img = await renderTokenImage(geminiCfg, identity({ symbol: "AGENT" }), "openai model", budget);
+      // Same theme/PNG-shaped result as the pure-local path -- the caller
+      // (runner/loop.ts) never sees a difference when Gemini is unreachable.
+      assert.equal(img.theme, "ascii");
+      assert.equal(img.contentType, "image/png");
+      assert.deepEqual([...img.buffer.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+    });
+
+    test("never charges the meter when the key is missing", async () => {
+      delete process.env.TEST_GEMINI_KEY_UNSET;
+      const db = openMemoryDb();
+      const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
+      await renderTokenImage(geminiCfg, identity(), "openai model", budget);
+      assert.equal(budget.meterUsed("gemini-image-usd"), 0);
+    });
+
+    test("falls back without charging once the monthly cap is already used up", async () => {
+      const cappedCfg = configSchema.parse({
+        assets: { image: { themed: true, gemini: {
+          enabled: true, apiKeyEnv: "TEST_GEMINI_KEY_CAPPED", monthlyUsdCap: 1, estimatedCostPerImage: 0.5,
+        } } },
+      });
+      process.env.TEST_GEMINI_KEY_CAPPED = "fake-key-for-budget-gating-test";
+      try {
+        const db = openMemoryDb();
+        const budget = new BudgetGuard(db, configSchema.parse({ dryRun: false }));
+        // The meter key is provider-agnostic ("image-gen-usd"); exhausting
+        // the wrong key here would make this test pass without testing the
+        // cap at all.
+        assert.equal(budget.meterCharge("image-gen-usd", 1, 1), true); // exhaust the cap first
+
+        const img = await renderTokenImage(cappedCfg, identity(), "openai model", budget);
+        assert.equal(img.contentType, "image/png"); // local fallback still produced something
+        assert.equal(budget.meterUsed("image-gen-usd"), 1, "must not have charged a second time");
+      } finally {
+        delete process.env.TEST_GEMINI_KEY_CAPPED;
+      }
+    });
+  });
+});
+
+describe("buildImagePrompt", () => {
+  test("leads with the real-world trend as the subject, not the coin name", () => {
+    // The term is the actual thing; the coin name is a marketing rewrite of
+    // it. An image model given "MoonShot Cure" draws a rocket; given
+    // "cancer drug approval" it draws something recognisable.
+    const prompt = buildImagePrompt(
+      identity({ name: "MoonShot Cure", description: "a hopeful little coin" }),
+      "monogram",
+      "cancer drug approval",
+    );
+    assert.match(prompt, /depicting: cancer drug approval/);
+    assert.match(prompt, /hopeful little coin/);
+  });
+
+  test("falls back to the coin name when no trend term is supplied", () => {
+    const prompt = buildImagePrompt(identity({ name: "Trips" }), "monogram");
+    assert.match(prompt, /depicting: Trips/);
+  });
+
+  test("carries a distinct style phrase per theme", () => {
+    const ascii = buildImagePrompt(identity(), "ascii");
+    const slop = buildImagePrompt(identity(), "slop");
+    const monogram = buildImagePrompt(identity(), "monogram");
+    assert.notEqual(ascii, slop);
+    assert.notEqual(ascii, monogram);
+    assert.notEqual(slop, monogram);
+  });
+
+  test("explicitly asks for no embedded text -- baked-in text from an image model is unreliable", () => {
+    assert.match(buildImagePrompt(identity(), "monogram"), /no text/i);
+  });
+
+  test("steers away from the flat-placeholder look that loses to real competitors", () => {
+    const prompt = buildImagePrompt(identity(), "monogram");
+    assert.match(prompt, /Do NOT produce a flat icon/);
+    assert.match(prompt, /concept art|film poster/);
+  });
+
+  // ==================================================================
+  // Regression: the provenance line must never reach the image model.
+  //
+  // Two independently-correct changes collided. Descriptions gained a
+  // provenance sentence ("Auto-launched from the trend X ... Score 71/100
+  // ... 2 independent families") for human readers, and image generation
+  // fed `identity.description` straight to the model as subject matter --
+  // so the model would have been asked to draw that sentence.
+  // ==================================================================
+  test("uses the creative description only, never the provenance suffix", () => {
+    const withProv = identity({
+      creativeDescription: "a trippy little coin",
+      description:
+        'a trippy little coin Auto-launched from the trend "Trips" detected on ' +
+        "fourchan + googleNews. Score 71/100 across 4 sightings; 2 independent families.",
+    });
+    const prompt = buildImagePrompt(withProv, "monogram", "Trips");
+    assert.match(prompt, /a trippy little coin/);
+    assert.ok(!/Auto-launched/.test(prompt), "provenance must not reach the image model");
+    assert.ok(!/Score 71\/100/.test(prompt), "score must not reach the image model");
+    assert.ok(!/independent families/.test(prompt));
+  });
+
+  test("still works for identities predating creativeDescription", () => {
+    const legacy = identity({ description: "an older coin" });
+    delete (legacy as { creativeDescription?: string }).creativeDescription;
+    assert.match(buildImagePrompt(legacy, "monogram", "thing"), /an older coin/);
+  });
+});
+
+// ==================================================================
+// Every generated coin used to look the same, and the cause was measurable
+// rather than aesthetic: themeOf() returned "monogram" for 20 of 20 real
+// launches -- terms like "Panthers", "Detroit" and "Trips" match neither
+// keyword list -- so every coin got one identical style string.
+//
+// The theme still sets the register; a per-ticker pick inside it sets the
+// look. These tests would all have failed against the single-string version.
+// ==================================================================
+
+describe("art direction variety", () => {
+  // Real tickers from the launches table, which is where the problem showed.
+  const REAL = ["PANTHERS", "BRAZILIA", "SMG", "CIGR", "MOTOR", "FTFS",
+                "QUALFY", "TRIPS", "MOMENT", "IDGAF"];
+
+  test("real launch tickers do not all get the same style", () => {
+    const styles = new Set(REAL.map((s) => styleFor("monogram", s)));
+    assert.ok(styles.size > 1,
+      `all ${REAL.length} tickers produced one style -- this is the exact bug`);
+    // Not just two: a pool that collapses to a couple of entries is the same
+    // problem wearing a hat.
+    assert.ok(styles.size >= 3, `only ${styles.size} distinct styles across ${REAL.length} tickers`);
+  });
+
+  test("the same ticker always gets the same style", () => {
+    for (const s of REAL) {
+      assert.equal(styleFor("monogram", s), styleFor("monogram", s));
+    }
+    // Reproducibility is the property the local templates have and the
+    // generated path lost when Cloudflare rejected `seed` -- the prompt is
+    // now what carries it.
+    assert.equal(styleFor("slop", "TRIPS"), styleFor("slop", "TRIPS"));
+  });
+
+  test("every style in every pool is reachable", () => {
+    for (const theme of ["monogram", "ascii", "slop"] as const) {
+      const seen = new Set<string>();
+      // Enough distinct symbols to hit every bucket of a small pool.
+      for (let i = 0; i < 4000; i++) seen.add(styleFor(theme, `SYM${i}`));
+      assert.ok(seen.size >= 4,
+        `${theme} only ever produced ${seen.size} styles -- a pool entry is unreachable`);
+    }
+  });
+
+  test("styles differ across themes, so the register still matters", () => {
+    const mono = new Set(Array.from({ length: 500 }, (_, i) => styleFor("monogram", `S${i}`)));
+    const ascii = new Set(Array.from({ length: 500 }, (_, i) => styleFor("ascii", `S${i}`)));
+    for (const a of ascii) {
+      assert.ok(!mono.has(a), "a theme's pool must not leak into another's");
+    }
+  });
+
+  test("the prompt carries the chosen style, not a fixed one", () => {
+    const a = buildImagePrompt(identity({ symbol: "PANTHERS" }), "monogram", "Panthers");
+    const b = buildImagePrompt(identity({ symbol: "CIGR" }), "monogram", "Panthers");
+    // Same theme, same trend, different ticker -> different art direction.
+    assert.notEqual(a, b);
   });
 });

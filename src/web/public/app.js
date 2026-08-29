@@ -207,11 +207,14 @@ function render(d) {
   $("launches").innerHTML = (d.launches || []).length
     ? d.launches.map(launchRow).join("")
     : `<div class="card empty">No coins yet. It only burps when a trend clears every gate.</div>`;
+  // Re-wired on every push: innerHTML replaces the nodes, taking their
+  // listeners with them.
+  wireCopyButtons($("launches"));
 
   // --- declines
-  delayHours = d.declineDelayHours ?? 6;
-  $("decline-delay").textContent = d.declineDelayHours
-    ? `${d.declineDelayHours}-hour delay` : "live";
+  delayMinutes = d.declineDelayMinutes ?? 5;
+  $("decline-delay").textContent = d.declineDelayMinutes
+    ? `${d.declineDelayMinutes}-min delay` : "live";
   $("declines").innerHTML = (d.declines || []).length
     ? d.declines.map((x) => `
         <div class="dashrow" style="grid-template-columns:1fr auto">
@@ -255,6 +258,35 @@ function render(d) {
         </div>`).join("")
     : `<div class="empty">Nothing read yet. Give the noses a minute.</div>`;
 
+  // --- the project's own coin (human-launched, excluded from every stat)
+  const pt = d.projectToken;
+  const ptCard = $("project-token-card");
+  if (pt && pt.mint) {
+    ptCard.hidden = false;
+    const ptShort = `${pt.mint.slice(0, 6)}…${pt.mint.slice(-6)}`;
+    $("project-token").innerHTML = `
+      <div class="dashrow" style="grid-template-columns:1fr auto">
+        <span class="label">Contract address</span>
+        <span>
+          <a href="${esc(pt.pumpFunUrl)}" target="_blank" rel="noopener noreferrer"
+             class="num" title="${esc(pt.mint)}">${esc(ptShort)}</a>
+          <button class="sm" data-copy="${esc(pt.mint)}" title="Copy full address">COPY</button>
+        </span>
+      </div>
+      <div class="dashrow" style="grid-template-columns:1fr auto">
+        <span class="label">Where to look</span>
+        <span>
+          <a href="${esc(pt.pumpFunUrl)}" target="_blank" rel="noopener noreferrer">pump.fun</a>
+          &nbsp;·&nbsp;
+          <a href="${esc(pt.solscanUrl)}" target="_blank" rel="noopener noreferrer">solscan</a>
+        </span>
+      </div>`;
+
+    wireCopyButtons(ptCard);
+  } else {
+    ptCard.hidden = true;
+  }
+
   // --- the purse
   const w = d.wallet;
   const purseCard = $("purse-card");
@@ -279,18 +311,7 @@ function render(d) {
         <span class="tag ${w.network === "mainnet-beta" ? "pink" : "sky"}">${esc(w.network)}</span>
       </div>`;
 
-    purseCard.querySelectorAll("[data-copy]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(btn.dataset.copy);
-          const was = btn.textContent;
-          btn.textContent = "COPIED";
-          setTimeout(() => { btn.textContent = was; }, 1500);
-        } catch {
-          btn.textContent = "COPY FAILED";
-        }
-      });
-    });
+    wireCopyButtons(purseCard);
   } else {
     purseCard.hidden = true;
   }
@@ -318,6 +339,37 @@ function render(d) {
   document.body.classList.remove("stale");
 }
 
+/** First and last few characters of a mint, for a line that has to stay short. */
+function shortMint(mint) {
+  const m = String(mint || "");
+  return m.length > 14 ? `${m.slice(0, 5)}…${m.slice(-5)}` : m;
+}
+
+/**
+ * Wire every copy-to-clipboard button inside a container.
+ *
+ * The page's CSP is `script-src 'self'` with no inline handlers, so these
+ * have to be attached after each render. Shared rather than repeated per
+ * card: the launches list re-renders on every SSE push, and a per-card copy
+ * of this loop is how one of them ends up quietly out of step.
+ */
+function wireCopyButtons(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-copy]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const was = btn.textContent;
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        btn.textContent = "COPIED";
+        setTimeout(() => { btn.textContent = was; }, 1500);
+      } catch {
+        btn.textContent = "COPY FAILED";
+        setTimeout(() => { btn.textContent = was; }, 1500);
+      }
+    });
+  });
+}
+
 function launchRow(l) {
   const v = l.outcome && l.outcome.verdict !== "pending" ? l.outcome.verdict : null;
   const win = v === "hit";
@@ -333,14 +385,25 @@ function launchRow(l) {
 
   return `<div class="launch-row${win ? " win" : ""}">
     <span class="sym">${esc(l.symbol)}</span>
-    <span class="nm">${esc(l.name)}</span>
+    <span class="nm">
+      <span class="nm-title">${esc(l.name)}</span>
+      <span class="ca">
+        <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer"
+           class="ca-mint" title="${esc(l.mint)}">${esc(shortMint(l.mint))}</a>
+        <button class="sm ca-copy" data-copy="${esc(l.mint)}" title="Copy contract address">COPY</button>
+      </span>
+    </span>
     <span class="score${l.score >= 70 ? " hot" : ""}">${Math.round(l.score)}</span>
     <span class="grey hide-md" style="font-size:13.5px">${esc((l.feeds || []).join(", "))}</span>
     <span class="r ${win ? "deep" : ""}" style="font-family:var(--display);font-size:19px">${esc(peak)}</span>
     <span class="r grey hide-md">${esc(v ? v : "settling")}</span>
     <span class="r strong ${cls}">${esc(pnl)}</span>
     <span class="r grey hide-md">${esc(ago(l.createdAt))}</span>
-    <span class="r hide-md"><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" style="font-family:var(--display);font-size:14px">peek</a></span>
+    <span class="r hide-md"><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" style="font-family:var(--display);font-size:14px">peek</a>${
+      l.sourceUrl
+        ? ` · <a href="${esc(l.sourceUrl)}" target="_blank" rel="noopener noreferrer nofollow" style="font-family:var(--display);font-size:14px">source</a>`
+        : ""
+    }</span>
   </div>`;
 }
 
@@ -507,13 +570,13 @@ function renderGateDetail() {
     // An empty delayed list is the normal early state, not a fault. Say which.
     : (g.delayed
       ? `<div class="empty" style="padding:18px 0">Nothing has aged past the
-         ${esc(String(delayHours))}-hour delay yet. Anything turned away in the last
-         ${esc(String(delayHours))} hours appears here once it is old enough to be
+         ${esc(String(delayMinutes))}-min delay yet. Anything turned away in the last
+         ${esc(String(delayMinutes))} minutes appears here once it is old enough to be
          useless to a front-runner.</div>`
       : "");
 
   const delayed = g.delayed ? `
-    <p class="note"><strong>Held back ${esc(String(delayHours))} hours.</strong>
+    <p class="note"><strong>Held back ${esc(String(delayMinutes))} minutes.</strong>
     Naming these live would tell you what the cow is looking at right now.</p>` : "";
 
   panel.innerHTML = `
@@ -541,7 +604,7 @@ function renderGateDetail() {
   // clicked, so moving the page under the reader would be an unrequested jump.
 }
 
-let delayHours = 6;
+let delayMinutes = 5;
 window.addEventListener("hashchange", renderGateDetail);
 window.addEventListener("keydown", (e) => { if (e.key === "Escape" && currentGate()) closeDetail(); });
 // Column count changes at breakpoints, which moves which row a gate sits in.

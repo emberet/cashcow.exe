@@ -73,8 +73,40 @@ export type SellResult = {
   dryRun: boolean;
 };
 
-/** Sell the entire dev position in `mint`. */
+/**
+ * Thrown instead of selling a mint on `devPosition.neverSellMints`.
+ *
+ * A distinct type so callers can tell "refused on purpose" apart from "the
+ * sale failed" -- the two deserve different handling, and conflating them
+ * would let a protected mint look like a transient RPC problem worth
+ * retrying.
+ */
+export class ProtectedMintError extends Error {
+  readonly mint: string;
+  constructor(mint: string) {
+    super(`refusing to sell ${mint}: listed in devPosition.neverSellMints`);
+    this.name = "ProtectedMintError";
+    this.mint = mint;
+  }
+}
+
+/** Is this mint one the operator has said must never be sold? */
+export function isProtectedMint(cfg: Config, mint: string): boolean {
+  return cfg.devPosition.neverSellMints.includes(mint);
+}
+
+/**
+ * Sell the entire dev position in `mint`.
+ *
+ * Every sale in the codebase routes through here -- the automated exit loop
+ * (positions/manager.ts) and the admin force-sell command (web/commands.ts)
+ * alike -- which is why the never-sell check lives at the top of this
+ * function rather than at either call site. Same reasoning as invariant 1:
+ * a single choke point is the only kind of guarantee worth having.
+ */
 export async function sellAll(cfg: Config, mint: string, slippagePct: number): Promise<SellResult> {
+  if (isProtectedMint(cfg, mint)) throw new ProtectedMintError(mint);
+
   const conn = getConnection(cfg);
   const wallet = loadWallet(cfg);
   const sdk = new PumpSdk();

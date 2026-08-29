@@ -28,6 +28,8 @@ import {
   setExperimentalWindow, getExperimentalWindow, clearExperimentalWindow, effectiveScoring,
 } from "./risk/experimentalWindow.ts";
 import { outcomeSummary, settledOutcomes, refreshOutcomes } from "./learning/outcomes.ts";
+import { recentDeclines } from "./web/queries.ts";
+import { isPretend } from "./config/schema.ts";
 import { runTuning, tuningHistory } from "./learning/tuner.ts";
 import { overlaySummary, clearOverlay, writeOverlay } from "./learning/overlay.ts";
 import { describeMandate } from "./learning/guardrails.ts";
@@ -59,6 +61,10 @@ cashcow.exe -- trend detection to pump.fun launcher
   preflight [--links] [--for-mainnet]   Verify every credential by using it
   capacity [--balance N]  How many launches/day the wallet can sustain, and why
   outcomes [--refresh]  What happened to the tokens it launched
+  declined [--limit N]  Recently rejected candidates and their reasons (the
+                         same 'declined' table the public dashboard shows on
+                         a delay -- this reads it live), plus an average-score
+                         comparison against what was actually launched
   learn [--apply] [--mandate]  Run a tuning pass from real outcomes
   tuning [--clear]      Show or discard what the tuner has learned
   halt [reason]         Stop new launches (open positions still exit)
@@ -205,7 +211,7 @@ async function main() {
       }
       console.log("\n  checking each credential by using it, not by testing it is non-empty\n");
       const forMainnet = flags.get("for-mainnet") === true;
-      const results = await runPreflight(db, cfg, forMainnet);
+      const results = await runPreflight(db, cfg, ctx, forMainnet);
       const mark = { ok: "  ok  ", warn: " warn ", fail: " FAIL " };
       for (const r of results) {
         console.log(`  [${mark[r.status]}] ${r.name.padEnd(24)} ${r.detail}`);
@@ -272,15 +278,52 @@ async function main() {
 
       const rows = settledOutcomes(db, cfg, 15);
       if (rows.length) {
-        console.log("  verdict  score  peak mcap    feeds                 term");
-        console.log("  " + "-".repeat(78));
+        // peak vol24h is DexScreener-sourced and observational only --
+        // classify() still verdicts on peak mcap alone (see src/learning/outcomes.ts).
+        console.log("  verdict  score  peak mcap    peak vol24h  feeds                 term");
+        console.log("  " + "-".repeat(90));
         for (const r of rows) {
           console.log(`  ${r.verdict.padEnd(8)} ${r.score.toFixed(1).padStart(5)}  ` +
             `$${String(Math.round(r.peakMcapUsd)).padStart(9)}  ` +
+            `$${String(Math.round(r.peakVolumeH24Usd)).padStart(9)}  ` +
             `${r.feeds.join("+").slice(0, 20).padEnd(21)} ${r.term.slice(0, 30)}`);
         }
         console.log();
       }
+      break;
+    }
+
+    case "declined": {
+      const limit = flags.get("limit") ? Number(flags.get("limit")) : 20;
+      // delayMinutes: 0 -- this is the operator's own terminal, not the public
+      // dashboard, so there's no reason to withhold what the bot is currently
+      // looking at (see recentDeclines()'s doc comment for why the public
+      // page delays it).
+      const rows = recentDeclines(db, cfg, 0, Number.isFinite(limit) ? limit : 20);
+
+      const declineMode = isPretend(cfg) ? 1 : 0;
+      const declinedAvg = (db.prepare(
+        `SELECT AVG(score) avg, COUNT(*) n FROM declined WHERE dry_run = ?`,
+      ).get(declineMode) as { avg: number | null; n: number });
+      const launchedAvg = (db.prepare(
+        `SELECT AVG(score) avg, COUNT(*) n FROM launch_outcomes WHERE dry_run = ?`,
+      ).get(declineMode) as { avg: number | null; n: number });
+
+      console.log(
+        `\n  declined avg score ${declinedAvg.avg == null ? "n/a" : declinedAvg.avg.toFixed(1)} ` +
+        `(n=${declinedAvg.n})   launched avg score ${launchedAvg.avg == null ? "n/a" : launchedAvg.avg.toFixed(1)} ` +
+        `(n=${launchedAvg.n})\n`,
+      );
+
+      if (!rows.length) { console.log("  no declines recorded yet\n"); break; }
+
+      console.log("  score  reason                    term");
+      console.log("  " + "-".repeat(70));
+      for (const r of rows) {
+        const term = r.count > 1 ? `${r.term} (×${r.count})` : r.term;
+        console.log(`  ${r.score.toFixed(1).padStart(5)}  ${r.reason.slice(0, 24).padEnd(25)} ${term.slice(0, 35)}`);
+      }
+      console.log();
       break;
     }
 

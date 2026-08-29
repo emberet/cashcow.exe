@@ -108,6 +108,21 @@ export const devPositionSchema = z.object({
     /** Retries before flagging a position as stuck for manual attention. */
     maxSellAttempts: z.number().int().positive().default(5),
   }).default({}),
+  /**
+   * Mints this bot must NEVER sell, whatever the exit rules say.
+   *
+   * The exit loop only ever acts on rows in `positions`, so a token the bot
+   * did not open a position in is already out of reach -- but "not currently
+   * reachable" is not the same as "cannot happen". A hand-inserted row, an
+   * admin force-sell, or future code that opens a position would each be
+   * enough. This list is enforced inside `sellAll()` in chain/trade.ts, the
+   * single function every sale routes through, so it holds for the automated
+   * exits and the admin command alike.
+   *
+   * Intended for the project's own token, which is held deliberately rather
+   * than traded.
+   */
+  neverSellMints: z.array(z.string()).default([]),
 });
 
 export const scoringSchema = z.object({
@@ -293,12 +308,12 @@ export const feedsSchema = z.object({
   dexActivity: z.object({
     ...feedBase,
     /**
-     * Off by default: unlike the other feeds, each poll fans out to up to
-     * `maxCandidatesPerPoll` DexScreener calls rather than one request. Ships
-     * off per the "safe by default" invariant until validated live with
-     * `npm run feeds`.
+     * On as of 2026-08-28, after the buy-share ceiling below was corrected to
+     * match where real graduated coins actually sit. Note this feed is unlike
+     * the others: each poll fans out to up to `maxCandidatesPerPoll`
+     * DexScreener calls rather than one request.
      */
-    enabled: z.boolean().default(false),
+    enabled: z.boolean().default(true),
     pollSeconds: z.number().positive().default(600),
     weight: z.number().min(0).default(0.4),
     /**
@@ -321,17 +336,21 @@ export const feedsSchema = z.object({
      * fingerprint, not stronger organic accumulation -- so the signal is
      * deliberately NOT monotonic past this ceiling.
      *
-     * UNVALIDATED DEFAULTS -- checked against 25 real graduated pump.fun
-     * coins (2026-08-27): freshly-migrated tokens clustered at 86-98% buy
-     * share (above this ceiling), long-settled ones at 38-55% (below this
-     * floor); only one sample landed inside 60-85, near the ceiling. Left
-     * as-is rather than fit to a 25-sample snapshot -- validate against
-     * `backtest-launches` / a longer `npm run feeds` sample before flipping
-     * `enabled: true`, per the feed's own "ships off until validated" doc
-     * comment above.
+     * The ceiling was 85 and is now 95, from the one real calibration sample
+     * on file: 25 graduated pump.fun coins (2026-08-27) put freshly-migrated
+     * tokens at 86-98% buy share and long-settled ones at 38-55%, so at 85
+     * this feed scored near-zero for almost exactly the population it exists
+     * to detect. 95 rather than 98 leaves the very top of that cluster still
+     * reading as suspicious; actual wash trading inside the wider band is
+     * caught by `maxWashSuspicionScore` below, which is a separate signal
+     * (tx-count vs replies) rather than more ceiling.
+     *
+     * Still a 25-sample basis -- confirm with `node src/cli.ts feeds --feed
+     * dexActivity` that live scores are non-zero AND still discriminating
+     * (not everything pinned near the ceiling).
      */
     minBuyShareForSignal: z.number().min(50).max(100).default(60),
-    maxBuyShareForSignal: z.number().min(50).max(100).default(85),
+    maxBuyShareForSignal: z.number().min(50).max(100).default(95),
     /** Reuses classify.ts's washSuspicionScore (txCount/replies) as a hard
      *  dampener; above this the signal is zeroed regardless of buy share. */
     maxWashSuspicionScore: z.number().positive().default(5),
@@ -390,6 +409,21 @@ export const assetsSchema = z.object({
      */
     maxDescriptionLength: z.number().int().positive().default(200),
     apiKeyEnv: z.string().default("ANTHROPIC_API_KEY"),
+    /**
+     * Append a factual provenance line to the coin's description saying which
+     * trend it came from and why it cleared the bar -- the term, the sources
+     * that corroborated it, and the score. A reader landing on the pump.fun
+     * page can then see what real-world thing the coin is about instead of
+     * only a model-written joke. On by default: a coin nobody can trace back
+     * to anything is exactly the shape of the ones that never traded.
+     */
+    includeProvenance: z.boolean().default(true),
+    /**
+     * Cap on creative description + provenance combined. Separate from
+     * maxDescriptionLength (which bounds only the model's own sentence), so
+     * turning provenance on cannot silently truncate the creative half.
+     */
+    maxTotalDescriptionLength: z.number().int().positive().default(500),
   }).default({}),
   image: z.object({
     /** `template` renders locally for ~free; `none` requires a fallback image. */
@@ -418,6 +452,59 @@ export const assetsSchema = z.object({
      * the ticker alone.
      */
     themed: z.boolean().default(false),
+    /**
+     * Real per-image AI art (Gemini's "Nano Banana" line) in place of the
+     * local SVG templates above -- a deliberate reversal of this block's own
+     * original "no generator API, no third-party imagery, no per-launch
+     * cost" posture (see docs/DECISIONS.md). Off by default like every other
+     * new capability here: the local templates keep working unchanged as
+     * the fallback on any failure (missing key, budget cap, timeout,
+     * content-safety rejection) -- same "never blocks a launch, degrades to
+     * deterministic local output" shape as assets/naming.ts's model call.
+     */
+    /**
+     * Which generator draws the coin face. "local" keeps the SVG templates
+     * below and calls nothing -- the safe default, unchanged for any
+     * deployment that does not opt in.
+     *
+     * Whatever a provider returns is resized locally to width/height before
+     * it is pinned, so the pump.fun minimum is met no matter what the
+     * provider emits. See the note on `width` above: art shipped at 512x512,
+     * under that floor, once already.
+     */
+    provider: z.enum(["local", "cloudflare", "gemini"]).default("local"),
+    /**
+     * Cloudflare Workers AI. 10,000 neurons/day are free with no billing
+     * setup. Measured against the live API (2026-08-29), FLUX.1 [schnell]
+     * bills 172.8 neurons per image -- about 57 images a day free, against a
+     * launch rate of 3-10. Zero marginal cost per launch, which answers this
+     * file's original objection to calling a generator API at all.
+     *
+     * The model takes no width/height parameter and returns a 1024x1024
+     * JPEG, which is exactly why the resize/re-encode step above is
+     * mandatory rather than defensive.
+     */
+    cloudflare: z.object({
+      accountIdEnv: z.string().default("CLOUDFLARE_ACCOUNT_ID"),
+      apiTokenEnv: z.string().default("CLOUDFLARE_API_TOKEN"),
+      model: z.string().default("@cf/black-forest-labs/flux-1-schnell"),
+      /** Diffusion iterations. The model caps this at 8. */
+      steps: z.number().int().min(1).max(8).default(4),
+    }).default({}),
+    gemini: z.object({
+      /** Superseded by `provider: "gemini"`; still honoured so an existing
+       *  config that set it keeps working. */
+      enabled: z.boolean().default(false),
+      /** "Nano Banana 2 Lite" -- cheapest current tier. Not a preview alias;
+       *  those were shut down 2026-06-25 and would 404. */
+      model: z.string().default("gemini-3.1-flash-lite-image"),
+      apiKeyEnv: z.string().default("GEMINI_API_KEY"),
+      /** ~88 images/month at estimatedCostPerImage's default. Its own USD
+       *  meter, separate from every other one in this repo, so image-gen
+       *  spend can never silently compete with naming/feed/announce budgets. */
+      monthlyUsdCap: z.number().nonnegative().default(3),
+      estimatedCostPerImage: z.number().positive().default(0.034),
+    }).default({}),
   }).default({}),
   ipfs: z.object({
     provider: z.literal("pinata").default("pinata"),
@@ -456,6 +543,38 @@ export const distributionSchema = z.object({
     { label: "operator", pct: 50 },
     { label: "weekly raffle", pct: 10 },
   ]),
+}).default({});
+
+/**
+ * Outbound notifications about the bot's own activity.
+ *
+ * NOTE: a separate in-flight change adds `xAnnounce` to this same block for
+ * public launch announcements on X. These are different things and should
+ * coexist -- `telegram` here is a PRIVATE operator alert (one chat, the
+ * operator's own), not public promotion, which is why it carries no
+ * disclosure text and no USD meter (the Telegram Bot API is free).
+ */
+export const socialSchema = z.object({
+  /**
+   * Links published in every launched token's metadata.
+   *
+   * Tokens were shipping with no socials at all, which is part of what a
+   * wallet reads as an unverified, information-less coin. This does not make
+   * a token "verified" on its own -- that needs an external listing -- but it
+   * gives a reader somewhere to go, and it is what the hand-launched token
+   * already carries. Empty by default; nothing is published unless set.
+   */
+  project: z.object({
+    twitter: z.string().default(""),
+    website: z.string().default(""),
+    telegram: z.string().default(""),
+  }).default({}),
+  telegram: z.object({
+    /** Off by default; no-ops harmlessly without credentials either way. */
+    enabled: z.boolean().default(false),
+    botTokenEnv: z.string().default("TELEGRAM_BOT_TOKEN"),
+    chatIdEnv: z.string().default("TELEGRAM_CHAT_ID"),
+  }).default({}),
 }).default({});
 
 export const configSchema = z.object({
@@ -606,7 +725,7 @@ export const configSchema = z.object({
      * now; delayed, it is an honest record instead of a tip sheet. The admin
      * portal is unaffected.
      */
-    declineDelayHours: z.number().nonnegative().default(6),
+    declineDelayMinutes: z.number().nonnegative().default(5),
     /**
      * Show the dev wallet address and balance on the PUBLIC page.
      *
@@ -620,12 +739,24 @@ export const configSchema = z.object({
      * portal always shows it.
      */
     showWallet: z.boolean().default(true),
+    /**
+     * The project's OWN token, if one exists -- a mint address published on
+     * the dashboard so visitors can find it.
+     *
+     * Deliberately separate from the `launches` table: this coin did not come
+     * out of the scoring pipeline, so folding it in would flatter every
+     * automated statistic on the page (hit rate, best market cap, fees per
+     * launch). It is displayed on its own and excluded from all of them.
+     * Empty by default -- most deployments have no such token.
+     */
+    projectTokenMint: z.string().default(""),
   }).default({}),
   storage: z.object({
     dbPath: z.string().default("data/bot.db"),
     haltFile: z.string().default("data/HALT"),
   }).default({}),
   distribution: distributionSchema,
+  social: socialSchema,
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
     json: z.boolean().default(true),

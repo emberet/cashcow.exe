@@ -1,6 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile, stat } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { extname, join, normalize, resolve, dirname } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
@@ -122,6 +124,8 @@ export function startWebServer(db: Db, cfg: Config, kill: KillSwitch): Promise<W
           note: "the admin portal is reachable from the network; put TLS in front of it",
         });
       }
+      const tunnelWarning = checkCloudflareTunnelTopology(cfg);
+      if (tunnelWarning) log.warn("possible Cloudflare tunnel topology collision", { detail: tunnelWarning });
 
       resolvePromise({
         url,
@@ -541,6 +545,50 @@ async function walletBalance(db: Db, cfg: Config): Promise<number | undefined> {
  * instance with no portal would expose a password oracle for no benefit. Only
  * `admin.js` ever calls them, so the public page loses nothing.
  */
+/**
+ * Best-effort check that this process's own port isn't the one a Cloudflare
+ * tunnel is publishing to the internet, when this instance serves the admin
+ * portal. `README.md` and a comment in `~/.cloudflared/config.yml` document
+ * the intended topology (public-only instance on 4601, admin-enabled bot on
+ * 4600, tunnel always at 4601) but nothing in code enforced it until now --
+ * see `docs/DECISIONS.md`.
+ *
+ * Deliberately advisory, not a hard startup failure: this is a heuristic
+ * regex scan of a config file this process does not own and cannot fully
+ * validate the shape of (no YAML parser here, to avoid a new dependency for
+ * a warning), so a false positive must never take the whole bot down with
+ * it -- invariant 7 (safe by default; a misconfiguration fails into *less*
+ * activity, not a crashed trading loop). A missing or unreadable file is
+ * read as "no tunnel configured here", never as a collision.
+ */
+export function checkCloudflareTunnelTopology(
+  cfg: Config,
+  configPath: string = join(homedir(), ".cloudflared", "config.yml"),
+): string | undefined {
+  if (!cfg.web.adminEnabled) return undefined; // nothing sensitive to protect
+
+  let text: string;
+  try {
+    text = readFileSync(configPath, "utf8");
+  } catch {
+    return undefined;
+  }
+
+  const port = String(cfg.web.port);
+  const loopbackHosts = new Set(["127.0.0.1", "localhost", cfg.web.host]);
+  const services = [...text.matchAll(/service:\s*http:\/\/([^\s:/]+):(\d+)/gi)];
+
+  const collision = services.find((m) => m[2] === port && loopbackHosts.has(m[1]!));
+  if (!collision) return undefined;
+
+  return (
+    `${configPath} has an ingress "service: http://${collision[1]}:${collision[2]}" that matches ` +
+    `this admin-enabled instance's own address (${cfg.web.host}:${cfg.web.port}). If that ingress ` +
+    `hostname is public-facing, the admin portal may be exposed to the internet -- verify the ` +
+    `tunnel's ingress targets a public-only, adminEnabled:false instance instead.`
+  );
+}
+
 export function isAdminPath(path: string): boolean {
   if (path.startsWith("/api/admin")) return true;
   if (path === "/api/login" || path === "/api/logout" || path === "/api/session") return true;
