@@ -1260,3 +1260,60 @@ have failed: real launch tickers produce more than one style (20/20 identical
 fails this), the same symbol always maps to the same style, and every pool
 entry is reachable. The last one matters because a hash that collapses onto a
 few buckets is the same bug wearing a hat.
+
+## 39. A zero balance is not a loss: 0.0975 SOL that never happened
+
+Routine maintenance turned up two positions closed as `no_balance` with a full
+`-0.05` write-off each. Both were wrong, and the ledger already knew it.
+
+`SMG` and `FTFS` each had a `dev_sell` row of **+0.04874043 SOL** with a real
+signature, and both signatures fetch from mainnet with `err: null`. The sales
+landed. The positions table recorded `exit_sol 0` and a total loss anyway.
+
+**How it happened.** `sellAll()` reads the live token balance and returns early
+when it is zero — correct in isolation. The exit path then read that zero as
+"the tokens never came back, write it off." The actual sequence was:
+
+```
+23:14:24  exit failed -- "Signature ... has expired: block height exceeded"
+23:14:25  exit failed -- AnchorError NotEnoughTokensToSell (0x1787)
+23:14:25  exit failed -- NotEnoughTokensToSell
+23:14:35  position had no token balance, closed   -> booked -0.05
+```
+
+The first attempt **did land**; the client just stopped waiting for it.
+"Blockhash expired" means the confirmation timed out, not that the transaction
+failed. Every later attempt was then correctly told there were no tokens left
+to sell, and the final balance read of zero was the aftermath of a *successful*
+sale being mistaken for a failed one.
+
+**Why it mattered beyond the ledger being wrong.** Realized loss feeds
+`maxDailyLossSol`, which is a breaker that stops launches. Two phantom losses
+of 0.0487 each is 0.0975 SOL of fiction charged against a 0.2 SOL daily loss
+budget — nearly half of it — and the same wrong numbers are what
+`launch_outcomes` hands the tuner to learn from. A bug that invents losses is
+strictly worse than one that hides them: it makes the safety rails fire early,
+on nothing.
+
+**The fix.** `recoveredSolFromLedger()` asks the spend ledger whether a
+`dev_sell` for this mint landed after the position opened, and the exit path
+consults it before writing anything off. The ledger is the right authority:
+every real sale records a measured row through the same single choke point
+invariant 1 puts on spending, so if the money came back it is there. Scoped by
+mint, by `opened_at` (an earlier position's proceeds must not pay off a later
+one), and by `dry_run` (the pretend ledger can never credit a real position).
+
+A close with proceeds now reads `sold_before_retry` rather than `no_balance`,
+so the two cases stop being indistinguishable in the data. A genuine total
+loss — no sale on record — still books as `no_balance` at `-entry_sol`.
+
+The two live rows were corrected against their on-chain signatures. Realized
+P&L across closed positions moved from +0.1049 to **+0.20235 SOL**; the
+difference is entirely loss that never occurred.
+
+**Checked and clean:** the six launches that failed the same way
+(`TransactionExpiredBlockheightExceededError`) genuinely never landed — all
+six signatures are absent from mainnet. No orphaned mints, no spent SOL
+without a position. Failed launches also do not consume the daily cap, since
+`launchesLast24h()` counts ledger rows and those are only written after a
+launch settles. The exposure was specific to the exit path.

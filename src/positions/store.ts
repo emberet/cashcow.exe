@@ -71,6 +71,36 @@ export function closePosition(
   );
 }
 
+/**
+ * SOL already recovered for this mint according to the spend ledger.
+ *
+ * A zero token balance is ambiguous, and the difference is worth real money:
+ * either the wallet never received the tokens (a genuine total loss), or the
+ * sell ALREADY LANDED and this is a retry looking at the aftermath. The second
+ * is the common one -- a sell whose confirmation times out with "block height
+ * exceeded" has not necessarily failed, and when it did land, the next attempt
+ * sees NotEnoughTokensToSell and then an empty balance.
+ *
+ * The ledger is the authority here, not the balance: every real sale records a
+ * measured `dev_sell` row through the same single choke point that invariant 1
+ * puts on spending. If a row exists for this mint after the position opened,
+ * that money came back and the position must not be written off.
+ *
+ * Scoped by `dry_run` so the pretend ledger can never pay off a real position.
+ */
+export function recoveredSolFromLedger(
+  db: Db, mint: string, sinceTs: number, dryRun: number,
+): { sol: number; signature: string | null } {
+  const row = db.prepare(
+    `SELECT COALESCE(SUM(sol_delta), 0) AS sol,
+            MAX(signature)              AS signature
+       FROM spend_ledger
+      WHERE kind = 'dev_sell' AND mint = ? AND ts >= ? AND dry_run = ?`,
+  ).get(mint, sinceTs, dryRun) as { sol: number; signature: string | null };
+
+  return { sol: row.sol ?? 0, signature: row.signature ?? null };
+}
+
 export function recordSellFailure(db: Db, id: number, err: string, maxAttempts: number): "retry" | "stuck" {
   const row = db.prepare(`SELECT sell_attempts FROM positions WHERE id = ?`).get(id) as
     | { sell_attempts: number } | undefined;
