@@ -8,6 +8,19 @@ const esc = (s) =>
 
 const int = (n) => (n == null ? "—" : Math.round(n).toLocaleString());
 
+/**
+ * How a network is shown to a reader.
+ *
+ * `mainnet-beta` is Solana's own cluster identifier and stays exactly that
+ * everywhere it does work -- config validation (`z.enum`), RPC selection, and
+ * the `?cluster=` parameter on explorer links all key off the real string.
+ * This only changes the label, because "beta" reads as unfinished to anyone
+ * who does not know it is a permanent historical name.
+ */
+function networkLabel(network) {
+  return network === "mainnet-beta" ? "Mainnet" : network;
+}
+
 function sol(n, d = 4) {
   if (n == null) return "—";
   const a = Math.abs(n);
@@ -81,7 +94,7 @@ function render(d) {
   // --- status chips
   $("p-mode").textContent = d.dryRun ? "PLAY MONEY" : "REAL MONEY";
   $("p-mode").className = `pill ${d.dryRun ? "sun" : "pink"}`;
-  $("p-network").textContent = d.network;
+  $("p-network").textContent = networkLabel(d.network);
 
   const statusWord = {
     live: "MUNCHING", "dry-run": "PRETEND MUNCHING",
@@ -308,7 +321,7 @@ function render(d) {
       </div>
       <div class="dashrow" style="grid-template-columns:1fr auto">
         <span class="label">Network</span>
-        <span class="tag ${w.network === "mainnet-beta" ? "pink" : "sky"}">${esc(w.network)}</span>
+        <span class="tag ${w.network === "mainnet-beta" ? "pink" : "sky"}">${esc(networkLabel(w.network))}</span>
       </div>`;
 
     wireCopyButtons(purseCard);
@@ -331,7 +344,7 @@ function render(d) {
   paintCountdown();
 
   $("foot-meta").innerHTML =
-    `${d.dryRun ? "Play money — nothing real is spent" : `Live on ${esc(d.network)}`}<br>` +
+    `${d.dryRun ? "Play money — nothing real is spent" : `Live on ${esc(networkLabel(d.network))}`}<br>` +
     `Updated ${new Date(d.at).toLocaleTimeString()}<br>` +
     `The pre-launch queue stays behind the barn door`;
 

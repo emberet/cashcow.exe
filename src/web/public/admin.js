@@ -211,7 +211,10 @@ function buildNav() {
 function render(d) {
   const b = d.budget;
 
-  $("a-mode").textContent = `${d.dryRun ? "PLAY MONEY" : "REAL MONEY"} · ${d.network}`;
+  // Display only -- see networkLabel() in app.js; the real cluster id is
+  // what config, RPC and explorer links use.
+  const netLabel = d.network === "mainnet-beta" ? "Mainnet" : d.network;
+  $("a-mode").textContent = `${d.dryRun ? "PLAY MONEY" : "REAL MONEY"} · ${netLabel}`;
   $("a-mode-sub").textContent = d.dryRun ? "nothing real is ever signed" : "this spends real SOL";
   $("a-title").textContent = TITLES[tab];
 
@@ -235,7 +238,7 @@ function render(d) {
   // --- wallet (admin always sees it)
   const w = d.wallet;
   $("a-purse").innerHTML = w && w.address
-    ? `<div class="label">Purse · ${esc(w.network)}</div>
+    ? `<div class="label">Purse · ${esc(w.network === "mainnet-beta" ? "Mainnet" : w.network)}</div>
        <div class="bal">${esc(sol(w.balanceSol))} SOL</div>
        <div class="addr">
          <a href="${esc(w.explorerUrl)}" target="_blank" rel="noopener noreferrer"
