@@ -1317,3 +1317,46 @@ six signatures are absent from mainnet. No orphaned mints, no spent SOL
 without a position. Failed launches also do not consume the daily cap, since
 `launchesLast24h()` counts ledger rows and those are only written after a
 launch settles. The exposure was specific to the exit path.
+
+## 40. The person-name screen was wrong in both directions
+
+Maintenance found the brand/likeness heuristic misfiring both ways in one day
+of real logs. The asymmetry is the whole design — a false positive costs a
+duller token name, a false negative is a right-of-publicity claim — so the two
+halves are not equally urgent, but both were real.
+
+**False positives: 7 in a day.** `"Tiger Rally"`, `"Brazilian Vibes"`,
+`"Now You"`, `"Networth Until"` were all rejected as person names. They are
+title-cased sentence fragments the phrase extractor happened to capitalise.
+Each rejection forces fallback naming, which is how launches ended up with
+tickers like `NETWORTH` and `FLEX` — directly against the goal of the last
+several changes.
+
+Fixed the way the list was already designed to be fixed: `NOT_A_PERSON`
+already carried `"the"`, `"of"`, `"and"`, `"for"`, so it was extended with the
+function words that actually appeared (`now`, `you`, `until`, `what`, `who`
+…) and with market/meme vocabulary (`vibes`, `rally`, `pump`, `chart`,
+`flex` …). Words that *are* real names — Wave, Storm, Winter, Summer, Rich,
+Young — were deliberately left out, because that is the expensive direction.
+
+**A false negative, found while fixing the above.** The per-word test was:
+
+```
+/^[A-Z][a-z'-]{1,}$/
+```
+
+with a comment directly above it reading *"allowing O'Brien, Al-Hassan"*. The
+character class has no uppercase in it. The `B` in `O'Brien` failed the test,
+`looksLikePersonName()` returned false, and the whole name was declared not a
+person — so **every apostrophe and hyphen name was silently exempt from the
+screen**. The code did the opposite of its own comment, and in the direction
+the config comment calls the costly one.
+
+Now `/^[A-Z][a-z]*(?:['-][A-Z]?[a-z]+)*$/`: an uppercase letter is allowed
+only immediately after an apostrophe or hyphen, so `O'Brien`, `Al-Hassan`,
+`Jean-Luc` and `D'Angelo` are screened while acronyms like `NFL` and `US`
+still fail and are not mistaken for people.
+
+Nothing in the suite exercised this function at all, which is how a regex that
+contradicted its own comment survived. `test/person-name.test.ts` now covers
+both directions, including the specific strings from the logs.
