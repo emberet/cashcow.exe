@@ -1360,3 +1360,91 @@ still fail and are not mistaken for people.
 Nothing in the suite exercised this function at all, which is how a regex that
 contradicted its own comment survived. `test/person-name.test.ts` now covers
 both directions, including the specific strings from the logs.
+
+## 41. Clearing stranded pretend positions without inventing losses
+
+Five pretend positions sat open for roughly two days with `sell_attempts = 0`.
+Zero attempts is the tell: nothing had *tried* to exit them, because nothing
+was looking.
+
+Everything that services exits reads `listOpen(db, dryRun)` for the mode the
+bot is currently running in. Positions opened during a simulate session are
+therefore invisible the moment the bot switches to real mode — not stuck, not
+failing, just unreachable. They are harmless to real trading, since
+`openPositionCount()` is scoped the same way and never counted them against
+`maxConcurrentPositions`, but they accumulate and misreport the pretend
+ledger.
+
+**The trap in cleaning them up.** The obvious move is
+`closePosition(..., exitSol: 0)`, and it is wrong: that computes
+`realized_pnl_sol = 0 - entry_sol` and would have booked **0.25 SOL of loss**
+across the five. That is exactly the error §39 was about — inventing losses is
+worse than hiding them, because realized loss drives the `maxDailyLossSol`
+breaker and feeds the tuner.
+
+There is no outcome to record here. No sale, no proceeds, nothing measured.
+Booking `-0.05` invents a loss and booking `0` invents a break-even, so
+`abandonPosition()` records neither: `status = 'abandoned'`,
+`realized_pnl_sol` left NULL. The row leaves the open count and every P&L
+aggregate for free, because those filter on `status = 'open'` and
+`status = 'closed'` respectively — no migration needed, since `status` is a
+plain TEXT column with no CHECK constraint.
+
+It refuses to touch anything that is not still `open`, so a settled position
+can never be relabelled, and the cleanup additionally skips any mint with a
+`dev_sell` on record — proceeds mean a real outcome, which belongs in
+`closePosition()`, not here.
+
+`listOrphanedByMode()` names the condition directly rather than leaving it as
+"pretend rows that happen to be old". Nothing sweeps automatically: a mode the
+someone is actively testing in would be exactly the wrong thing to clear
+behind their back, so this stays a deliberate action.
+
+Applied to the five live rows. Real P&L unchanged at +0.20235 SOL, pretend P&L
+still 0.
+
+## 42. The X meter was billing 5x what X was billing
+
+The X dashboard showed **$16 of credit remaining**. The bot's own meter showed
+**$43.875 of a $50 cap** — about four hours from shutting off the
+highest-weight feed (1.2) with most of the month's credit unspent.
+
+Both numbers were computed correctly. Only one of them was about real money.
+
+`xApi.poll()` charges before it spends, which is the right order and stays:
+
+```ts
+const estimate = c.maxResults * c.estimatedCostPerRead;   // 25 x $0.005
+if (!ctx.budget.meterCharge(METER_KEY, estimate, c.monthlyUsdCap)) return [];
+```
+
+A poll that is never billed cannot overrun the cap, and that property is worth
+keeping. The bug is that the estimate was never *reconciled*. Every poll was
+billed for a full page of 25 posts, while the query — filtered with a dozen
+negative terms (`-airdrop -giveaway -presale …`) — typically returns a
+handful. Roughly 5 per poll against 25 charged is the ~5x gap between $43.875
+metered and ~$9 actually spent.
+
+X reports what it actually returned, and the response type already declared
+it: `meta.result_count`. Nothing read it. The poll now refunds the difference
+between the worst case it charged and what came back.
+
+**Why a refund rather than a smaller estimate.** Lowering
+`estimatedCostPerRead` or `maxResults` to "what usually comes back" would
+guess in the other direction and let a genuinely full page overrun the cap.
+Charging the worst case and giving back the remainder is exact, needs no
+tuning, and keeps the pre-spend guarantee.
+
+`meterRefund()` clamps at the meter, so a surprising `result_count` can only
+undo a charge, never manufacture headroom. The cap still binds; a refund
+reopens exactly what it returned and no more; zero and negative refunds are
+ignored rather than quietly treated as charges. **Nothing here raises a
+limit** — the pre-charge, the cap, and the fail-closed readiness check are all
+unchanged. It only stops the meter lying about what was spent.
+
+This is the third instance of one pattern in as many maintenance findings, and
+worth naming: §39 invented losses that tripped a breaker, §41 nearly invented
+0.25 SOL more while cleaning up, and this invented spend that shut off a feed.
+Estimates written into a ledger and never reconciled against what actually
+happened all fail the same way — the safety rail fires on fiction, and the
+symptom shows up somewhere that looks unrelated to the estimate.

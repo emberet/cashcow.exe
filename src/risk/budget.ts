@@ -256,6 +256,27 @@ export class BudgetGuard {
     return true;
   }
 
+  /**
+   * Give back part of a charge that turned out to be smaller than estimated.
+   *
+   * The metered feeds charge a WORST CASE before spending, which is the right
+   * order -- a poll that is never billed cannot overrun the cap. But an
+   * estimate that is never reconciled is a slow lie: the X feed charged for a
+   * full page of 25 posts on every poll while a heavily-filtered query
+   * returned a handful, metering $43.88 against roughly $9 of real spend and
+   * stopping the highest-weight feed with most of the credit unused.
+   *
+   * Refunds are clamped to what is actually on the meter, so this can only
+   * ever undo a charge, never manufacture headroom.
+   */
+  meterRefund(key: string, amountUsd: number): void {
+    if (!(amountUsd > 0)) return;
+    const period = new Date().toISOString().slice(0, 7);
+    this.#db.prepare(
+      `UPDATE meter SET amount = MAX(0, amount - ?) WHERE key = ? AND period = ?`,
+    ).run(amountUsd, key, period);
+  }
+
   meterUsed(key: string): number {
     const period = new Date().toISOString().slice(0, 7);
     const row = this.#db.prepare(
