@@ -1360,3 +1360,45 @@ still fail and are not mistaken for people.
 Nothing in the suite exercised this function at all, which is how a regex that
 contradicted its own comment survived. `test/person-name.test.ts` now covers
 both directions, including the specific strings from the logs.
+
+## 41. Clearing stranded pretend positions without inventing losses
+
+Five pretend positions sat open for roughly two days with `sell_attempts = 0`.
+Zero attempts is the tell: nothing had *tried* to exit them, because nothing
+was looking.
+
+Everything that services exits reads `listOpen(db, dryRun)` for the mode the
+bot is currently running in. Positions opened during a simulate session are
+therefore invisible the moment the bot switches to real mode — not stuck, not
+failing, just unreachable. They are harmless to real trading, since
+`openPositionCount()` is scoped the same way and never counted them against
+`maxConcurrentPositions`, but they accumulate and misreport the pretend
+ledger.
+
+**The trap in cleaning them up.** The obvious move is
+`closePosition(..., exitSol: 0)`, and it is wrong: that computes
+`realized_pnl_sol = 0 - entry_sol` and would have booked **0.25 SOL of loss**
+across the five. That is exactly the error §39 was about — inventing losses is
+worse than hiding them, because realized loss drives the `maxDailyLossSol`
+breaker and feeds the tuner.
+
+There is no outcome to record here. No sale, no proceeds, nothing measured.
+Booking `-0.05` invents a loss and booking `0` invents a break-even, so
+`abandonPosition()` records neither: `status = 'abandoned'`,
+`realized_pnl_sol` left NULL. The row leaves the open count and every P&L
+aggregate for free, because those filter on `status = 'open'` and
+`status = 'closed'` respectively — no migration needed, since `status` is a
+plain TEXT column with no CHECK constraint.
+
+It refuses to touch anything that is not still `open`, so a settled position
+can never be relabelled, and the cleanup additionally skips any mint with a
+`dev_sell` on record — proceeds mean a real outcome, which belongs in
+`closePosition()`, not here.
+
+`listOrphanedByMode()` names the condition directly rather than leaving it as
+"pretend rows that happen to be old". Nothing sweeps automatically: a mode the
+someone is actively testing in would be exactly the wrong thing to clear
+behind their back, so this stays a deliberate action.
+
+Applied to the five live rows. Real P&L unchanged at +0.20235 SOL, pretend P&L
+still 0.

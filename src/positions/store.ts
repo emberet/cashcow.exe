@@ -10,7 +10,7 @@ export type PositionRow = {
   entry_fee_sol: number;
   opened_at: number;
   opened_sig: string | null;
-  status: "open" | "closed" | "stuck";
+  status: "open" | "closed" | "stuck" | "abandoned";
   exit_reason: string | null;
   exit_sol: number | null;
   closed_at: number | null;
@@ -99,6 +99,38 @@ export function recoveredSolFromLedger(
   ).get(mint, sinceTs, dryRun) as { sol: number; signature: string | null };
 
   return { sol: row.sol ?? 0, signature: row.signature ?? null };
+}
+
+/**
+ * Retire a position that has no outcome and never will.
+ *
+ * Pretend positions are stranded whenever the bot changes mode: everything
+ * that services exits reads `listOpen(db, dryRun)` for the CURRENT mode, so a
+ * simulate session's open positions are never looked at again once the bot is
+ * running for real. Five sat open for two days with `sell_attempts = 0` --
+ * nothing had tried, because nothing was looking.
+ *
+ * Deliberately NOT `closePosition(..., exitSol: 0)`. That computes a P&L of
+ * `-entry_sol` and would have invented a 0.25 SOL loss across those five,
+ * which is precisely the mistake DECISIONS #39 was about. There is no outcome
+ * here: no sale, no measured proceeds, nothing to report. `realized_pnl_sol`
+ * stays NULL and the row leaves both the open count and every P&L aggregate,
+ * since those filter on `status = 'open'` and `status = 'closed'` respectively.
+ */
+export function abandonPosition(db: Db, id: number, note: string): void {
+  db.prepare(
+    `UPDATE positions
+        SET status = 'abandoned', exit_reason = 'abandoned', closed_at = ?,
+            last_error = ?
+      WHERE id = ? AND status = 'open'`,
+  ).run(Date.now(), note.slice(0, 400), id);
+}
+
+/** Open positions belonging to the mode the bot is NOT running in. */
+export function listOrphanedByMode(db: Db, currentDryRun: boolean): PositionRow[] {
+  return db.prepare(
+    `SELECT * FROM positions WHERE status = 'open' AND dry_run = ? ORDER BY opened_at`,
+  ).all(currentDryRun ? 0 : 1) as PositionRow[];
 }
 
 export function recordSellFailure(db: Db, id: number, err: string, maxAttempts: number): "retry" | "stuck" {
