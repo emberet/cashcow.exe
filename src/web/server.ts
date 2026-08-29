@@ -44,6 +44,10 @@ const MIME: Record<string, string> = {
   ".png": "image/png",
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
+  // The airdrop workbook the public page links. Without this it would
+  // fall through to application/octet-stream and download as a blob
+  // some browsers refuse to name properly.
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 };
 
 type Client = { res: ServerResponse; admin: boolean; lastHash: string };
