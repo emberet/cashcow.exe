@@ -196,7 +196,13 @@ export async function runTuning(db: Db, cfg: Config): Promise<TuningRun> {
       sampleSize: evidence.sampleSize,
       applied: false,
     };
-    appendSelfImprovementEntry(db, cfg, run);
+    db.prepare(
+      `INSERT INTO tuning_runs (ts, sample_size, accepted, rejected, rationale, model, applied)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      Date.now(), evidence.sampleSize, "[]", "[]", run.reason!, cfg.learning.model, 0,
+    );
+    appendSelfImprovementEntry(db, cfg, run, undefined, evidence.summary);
     return run;
   }
 
@@ -208,7 +214,13 @@ export async function runTuning(db: Db, cfg: Config): Promise<TuningRun> {
       sampleSize: evidence.sampleSize,
       applied: false,
     };
-    appendSelfImprovementEntry(db, cfg, run);
+    db.prepare(
+      `INSERT INTO tuning_runs (ts, sample_size, accepted, rejected, rationale, model, applied)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      Date.now(), evidence.sampleSize, "[]", "[]", run.reason!, cfg.learning.model, 0,
+    );
+    appendSelfImprovementEntry(db, cfg, run, undefined, evidence.summary);
     return run;
   }
 
@@ -247,7 +259,7 @@ export async function runTuning(db: Db, cfg: Config): Promise<TuningRun> {
     result,
     applied: apply,
   };
-  appendSelfImprovementEntry(db, cfg, run);
+  appendSelfImprovementEntry(db, cfg, run, undefined, evidence.summary);
   return run;
 }
 

@@ -434,7 +434,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
 /* flex: none so the icon cannot be squeezed by a long label at narrow widths.
    The matching width/height attributes in the markup are the fallback for a
    stale stylesheet -- see the comment above nav.social in index.html. */
-.social-link svg { width: 17px; height: 17px; flex: none; fill: currentColor; display: block; }
+.social-link svg { width: 17px; height: 17px; flex: none; fill: currentcolor; display: block; }
 .social-link:hover { background: var(--leaf); transform: translate(-2px, -2px); box-shadow: 5px 5px 0 var(--ink); }
 .social-link:active { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--ink); }
 .social-link:focus-visible { outline: 3px solid var(--pink); outline-offset: 2px; }

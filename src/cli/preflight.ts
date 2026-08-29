@@ -179,7 +179,7 @@ function checkPosture(db: Db, cfg: Config): CheckResult[] {
   const auth = authState(db);
   out.push(auth.configured
     ? OK("Admin portal", "password configured")
-    : WARN("Admin portal", "disabled — no ADMIN_PASSWORD_HASH", "npm run admin-password"));
+    : WARN("Admin portal", auth.reason, "npm run admin-password"));
 
   if (cfg.web.host !== "127.0.0.1" && cfg.web.host !== "localhost") {
     out.push(WARN("Dashboard exposure",

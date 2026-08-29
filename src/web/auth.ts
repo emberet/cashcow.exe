@@ -140,8 +140,19 @@ export function clearStoredPassword(db: Db): void {
 /** True when the string is a hash we know how to verify against. */
 function wellFormedHash(stored: string): boolean {
   const legacy = /^scrypt\$[0-9a-f]+\$[0-9a-f]{128}$/.test(stored);
-  const versioned = /^scrypt\$\d+\$\d+\$\d+\$[0-9a-f]+\$[0-9a-f]{128}$/.test(stored);
-  return legacy || versioned;
+  if (legacy) return true;
+
+  const versioned = /^scrypt\$(\d+)\$(\d+)\$(\d+)\$[0-9a-f]+\$[0-9a-f]{128}$/.exec(stored);
+  if (!versioned) return false;
+
+  const N = Number(versioned[1]);
+  const r = Number(versioned[2]);
+  const p = Number(versioned[3]);
+  // Reject if parameters would require more than the 512 MiB maxmem used by login
+  const requiredMem = 128 * N * r * p;
+  if (requiredMem > 512 * 1024 * 1024) return false;
+
+  return true;
 }
 
 export function authState(db: Db): AuthState {

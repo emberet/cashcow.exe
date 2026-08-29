@@ -8,7 +8,7 @@ Honest state of play. Updated 2026-08-25.
 
 | Area | How |
 |---|---|
-| Safety rails, exit rules, filters, saturation, tuner guardrails, adaptive capacity | **160 tests**, `npm test` |
+| Safety rails, exit rules, filters, saturation, tuner guardrails, adaptive capacity | **272 tests**, `npm test` |
 | Types | `npx tsc --noEmit` clean, no build step |
 | Feed adapters | Live polls. 6 of 9 enabled feeds producing; 300 signals/poll |
 | Full signal pipeline | End-to-end dry run: feeds → phrases → score → filters → saturation → naming → artwork → recorded launch |
@@ -112,9 +112,10 @@ and an absent one look identical to `echo $VAR`, and only one of them is obvious
 - Pinata JWT (free tier) — pump.fun's own IPFS endpoint is deprecated
 - `ANTHROPIC_API_KEY` — **required** for live mainnet; powers naming, the
   brand/likeness screen, and the tuner
-- `ADMIN_PASSWORD_HASH` via `npm run admin-password` — the portal is disabled
-  without it. `admin-password --save` stores the hash in the database instead,
-  where it overrides the env var; the portal can then rotate it in-place.
+- `ADMIN_PASSWORD_HASH` via `npm run admin-password` — the portal requires
+  either the environment hash or a saved database override. `admin-password --save`
+  stores the hash in the database instead, where it takes precedence over the
+  environment variable; the portal can then rotate it in-place.
 - Optional feeds: Reddit OAuth app, Neynar key, X API (pay-per-use, off by
   default)
 - A **fresh** dev wallet funded only with write-off capital

@@ -117,7 +117,7 @@ export const dexActivityFeed: FeedAdapter = {
         feed: "dexActivity",
         term,
         rawScore: score,
-        observedAt: new Date(coin.created_timestamp ?? now),
+        observedAt: new Date(now),
         url: activity.pairUrl ?? `https://pump.fun/coin/${coin.mint}`,
         meta: {
           symbol, mint: coin.mint,
@@ -125,6 +125,7 @@ export const dexActivityFeed: FeedAdapter = {
           liquidityUsd: activity.liquidityUsd, volumeH24: activity.volumeH24,
           replies: coin.reply_count ?? 0,
           kind: "organic-buy-pressure",
+          createdTimestamp: coin.created_timestamp,
         },
       };
       return signal;

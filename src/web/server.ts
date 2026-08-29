@@ -103,12 +103,19 @@ export function startWebServer(db: Db, cfg: Config, kill: KillSwitch): Promise<W
       const url = `http://${cfg.web.host}:${cfg.web.port}`;
       const auth = authState(db);
 
+      const adminEnabled = cfg.web.adminEnabled && auth.configured;
       log.info("dashboard listening", {
         url,
         public: cfg.web.publicEnabled ? `${url}/` : "disabled",
-        admin: auth.configured ? `${url}/admin` : "DISABLED (no password configured)",
+        admin: adminEnabled
+          ? `${url}/admin`
+          : cfg.web.adminEnabled
+            ? "DISABLED (no password configured)"
+            : "disabled",
       });
-      if (!auth.configured) log.warn("admin portal disabled", { reason: auth.reason });
+      if (cfg.web.adminEnabled && !auth.configured) {
+        log.warn("admin portal disabled", { reason: auth.reason });
+      }
       if (cfg.web.host !== "127.0.0.1" && cfg.web.host !== "localhost") {
         log.warn("dashboard is bound to a non-loopback address", {
           host: cfg.web.host,

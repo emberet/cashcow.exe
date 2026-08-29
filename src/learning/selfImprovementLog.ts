@@ -65,7 +65,12 @@ function formatRejection(r: { path: string; reason: string }): string {
   return `  - \`${r.path}\`: rejected -- ${r.reason}`;
 }
 
-function formatEntry(db: Db, cfg: Config, run: TuningRun): string {
+function formatEntry(
+  db: Db,
+  cfg: Config,
+  run: TuningRun,
+  summary?: { hits: number; modest: number; duds: number },
+): string {
   const when = new Date().toISOString();
   const mode = isPretend(cfg) ? "dry-run" : "live";
   const lines: string[] = [`## ${when} (${mode}, ${cfg.network})`];
@@ -75,13 +80,18 @@ function formatEntry(db: Db, cfg: Config, run: TuningRun): string {
     return lines.join("\n");
   }
 
-  const summary = outcomeSummary(db, cfg);
+  const s = summary ?? outcomeSummary(db, cfg);
   lines.push(
     `Sample: ${run.sampleSize} settled launches ` +
-    `(${summary.hits} hit / ${summary.modest} modest / ${summary.duds} dud). ` +
+    `(${s.hits} hit / ${s.modest} modest / ${s.duds} dud). ` +
     `Applied: ${run.applied ? "yes" : "no"}.`,
   );
-  if (run.rationale) lines.push("", run.rationale.trim());
+  if (run.rationale) {
+    lines.push("");
+    // Indent multiline rationale to prevent Markdown entry splitting
+    const rationaleLines = run.rationale.trim().split("\n");
+    lines.push(...rationaleLines.map((line) => `  ${line}`));
+  }
 
   const accepted = run.result?.accepted ?? [];
   const rejected = run.result?.rejected ?? [];
@@ -113,15 +123,25 @@ function trim(content: string): string {
  * enough evidence yet" cycles a fast cadence mostly produces early on.
  */
 export function appendSelfImprovementEntry(
-  db: Db, cfg: Config, run: TuningRun, path: string = DEFAULT_LOG_PATH,
+  db: Db,
+  cfg: Config,
+  run: TuningRun,
+  path: string = DEFAULT_LOG_PATH,
+  summary?: { hits: number; modest: number; duds: number },
 ): void {
-  const file = resolveLogPath(path);
-  mkdirSync(dirname(file), { recursive: true });
+  try {
+    const file = resolveLogPath(path);
+    mkdirSync(dirname(file), { recursive: true });
 
-  const existing = existsSync(file) ? readFileSync(file, "utf8") : HEADER;
-  const base = existing.endsWith("\n") ? existing : `${existing}\n`;
-  const entry = `${formatEntry(db, cfg, run)}\n\n`;
-  writeFileSync(file, trim(`${base}${entry}`), "utf8");
+    const existing = existsSync(file) ? readFileSync(file, "utf8") : HEADER;
+    const base = existing.endsWith("\n") ? existing : `${existing}\n`;
+    const entry = `${formatEntry(db, cfg, run, summary)}\n\n`;
+    writeFileSync(file, trim(`${base}${entry}`), "utf8");
 
-  log.debug("self-improvement log entry written", { file, ran: run.ran });
+    log.debug("self-improvement log entry written", { file, ran: run.ran });
+  } catch (err) {
+    log.warn("self-improvement log write failed, continuing", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

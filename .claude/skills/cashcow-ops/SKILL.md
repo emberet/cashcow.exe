@@ -15,7 +15,7 @@ security boundary, safe-by-default) apply to everything below.
 
 ## Before running anything
 
-- Run commands from the repo root (`/Users/srinjoydas/Downloads/cashcow`).
+- Run commands from the repo root (resolve the current repository root dynamically).
 - `npm run <x>` and `node src/cli.ts <x>` are equivalent for the commands
   that have an npm alias; use whichever reads more clearly.
 - **The `ANTHROPIC_API_KEY` shell-empty-var gotcha**: if a command fails
@@ -33,7 +33,7 @@ security boundary, safe-by-default) apply to everything below.
 These never spend money or change state -- run them freely to answer a
 "what's going on" question:
 
-```
+```bash
 node src/cli.ts feeds [--feed <id>]   # poll every feed once, what each returned
 node src/cli.ts score                 # ranked candidates with score components
 node src/cli.ts positions             # open + recent dev positions
@@ -58,7 +58,7 @@ These are reversible but change what the bot does live. Explain what will
 happen and get a yes before running, same as any other side-effecting
 action:
 
-```
+```bash
 node src/cli.ts halt "reason"         # stop new launches (open positions still exit)
 node src/cli.ts resume                # clear the halt
 node src/cli.ts boost-window --hours N [--reason "..."] [...]
