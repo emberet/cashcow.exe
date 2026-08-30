@@ -20,7 +20,8 @@ export type Family =
   | "press"     // what publishers are pushing
   | "forum"     // link-aggregator discussion communities
   | "social"    // broadcast social platforms
-  | "markets";  // people staking money on an outcome
+  | "markets"   // people staking money on an outcome
+  | "culture";  // meme-documentation sites (KYM, Urban Dictionary)
 
 export const FEED_FAMILY: Record<string, Family> = {
   fourchan: "crypto",
@@ -42,6 +43,11 @@ export const FEED_FAMILY: Record<string, Family> = {
   // family, same reasoning as dexActivity above.
   watchlist: "social",
   polymarket: "markets",
+  // One population between them: both document memes rather than host the
+  // crowds making them. Two culture sites agreeing is within-family
+  // corroboration, not independent confirmation.
+  knowYourMeme: "culture",
+  urbanDictionary: "culture",
 };
 
 export function familyOf(feed: string): Family {

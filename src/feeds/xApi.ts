@@ -51,7 +51,8 @@ export const xApiFeed: FeedAdapter = {
     const c = ctx.cfg.feeds.xApi;
 
     // Charge before spending. Estimate the worst case: a full page of results.
-    const estimate = c.maxResults * c.estimatedCostPerRead;
+    // Floored at one request's cost -- see estimatedCostPerRequest in schema.
+    const estimate = Math.max(c.maxResults * c.estimatedCostPerRead, c.estimatedCostPerRequest);
     if (!ctx.budget.meterCharge(METER_KEY, estimate, c.monthlyUsdCap)) {
       log.warn("X API poll skipped: monthly USD cap would be exceeded", {
         used: ctx.budget.meterUsed(METER_KEY), cap: c.monthlyUsdCap, estimate,
@@ -79,7 +80,11 @@ export const xApiFeed: FeedAdapter = {
     // month's credit still unused. Refund is clamped at the meter, so a
     // surprising result_count can never mint headroom.
     const actualReads = json.meta?.result_count ?? json.data?.length ?? c.maxResults;
-    const overcharge = estimate - Math.min(actualReads, c.maxResults) * c.estimatedCostPerRead;
+    const owed = Math.max(
+      Math.min(actualReads, c.maxResults) * c.estimatedCostPerRead,
+      c.estimatedCostPerRequest,
+    );
+    const overcharge = estimate - owed;
     if (overcharge > 0) ctx.budget.meterRefund(METER_KEY, overcharge);
 
     const out: RawSignal[] = [];

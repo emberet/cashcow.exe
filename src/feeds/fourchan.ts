@@ -1,4 +1,5 @@
 import { fetchJson } from "../util/http.ts";
+import { log, errFields } from "../util/log.ts";
 import { type FeedAdapter, type FeedContext, type RawSignal, clamp01, logNorm } from "./types.ts";
 
 /**
@@ -53,7 +54,26 @@ export const fourchanFeed: FeedAdapter = {
   },
 
   async poll(ctx: FeedContext): Promise<RawSignal[]> {
-    const { board } = ctx.cfg.feeds.fourchan;
+    const cfg = ctx.cfg.feeds.fourchan;
+    // `boards` is the list; the legacy `board` string is merged for configs
+    // written before multi-board existed. All boards share one feed id and
+    // one independence family on purpose -- one site, one population.
+    const boards = [...new Set([cfg.board, ...cfg.boards].filter(Boolean))];
+
+    const out: RawSignal[] = [];
+    for (const board of boards) {
+      try {
+        out.push(...await pollBoard(board));
+      } catch (e) {
+        // One board down (or slow) must not cost the others their poll.
+        log.warn("fourchan: board failed, continuing", { board, ...errFields(e) });
+      }
+    }
+    return out;
+  },
+};
+
+async function pollBoard(board: string): Promise<RawSignal[]> {
     const pages = await fetchJson<CatalogPage[]>(
       `https://a.4cdn.org/${encodeURIComponent(board)}/catalog.json`,
       { timeoutMs: 15_000 },
@@ -120,5 +140,4 @@ export const fourchanFeed: FeedAdapter = {
     }
 
     return out;
-  },
-};
+}

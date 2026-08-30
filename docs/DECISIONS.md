@@ -1577,3 +1577,62 @@ corroborated by a tweet is one crowd, not two.
   announcement (#27).
 - *Polymarket*: disabled in config — 300 consecutive failures from a
   network-level block, not a code bug. The adapter stays.
+
+## 45. Where the cow looks hardest: the priority tier and the culture family
+
+Operator directive: hunt hardest in (1) the accounts whose single post *is*
+the trend — megaphones, world leaders, tech giants — and (2) the fringe
+corners where memes incubate. Both shipped, with the boundaries that keep
+them from becoming holes in the rails.
+
+**The high-alert tier** (`feeds.watchlist.priorityHandles`, 12 accounts:
+megaphones, leaders, tech). Polled every 5 minutes while the normal tier
+waits out 15; their signals carry a rawScore floor of 0.35 — a megaphone's
+post has reach by construction, and the floor lifts the `reach` component
+honestly instead of pretending 200M followers need to click like first.
+**"Priority" buys freshness and scoring weight, never a gate.** Filters
+(the likeness screen above all), self-dedupe, saturation and BudgetGuard are
+untouched: an Elon *phrase* can launch within minutes; a token named ELON
+still cannot launch at all. That pairing — watchlist on, likeness rail
+untouched — remains one decision, not two.
+
+**The billing floor came first.** The tier multiplies X request volume ~8x
+while the per-request-vs-per-read question (§42's correction) is still open,
+and since_id makes *empty responses the common case* — metered as free, real
+per-request spend would have been invisible. Both X adapters now charge
+`max(reads × perRead, perRequest)` (`estimatedCostPerRequest`, default
+0.005). Conservative in both billing worlds: over-metering can only pause
+feeds early, never overspend, and the operator's dashboard calibration
+corrects the constant later.
+
+**Multi-board chan coverage** (`fourchan.boards`: biz, g, v, tv). One fetch
+per board, every signal still tagged `fourchan`, still ONE independence
+family — four boards of one site are one population, and splitting them
+would manufacture exactly the fake corroboration independence.ts exists to
+prevent. Per-board failures are isolated so one slow board cannot cost the
+others their poll.
+
+**The `culture` family** (knowYourMeme + urbanDictionary, both new). Meme
+documentation is a genuinely different population from the forums and
+platforms where memes are *made*, so it corroborates across families — but
+the two sites share ONE family, same reasoning as dexActivity→crypto. KYM is
+scraped from server-rendered HTML (no API exists); the parsers are pinned to
+fixtures sliced from the live pages the day they were written, so a redesign
+fails a test before it silently zeroes a feed, and at runtime degrades to
+zero signals plus a warning. UD's words-of-the-day API returns original
+submission dates years in the past — one more case where `observed_at` would
+lie and `ingested_at` (invariant 5) is what scoring actually uses.
+
+**Investigated and declined, again with evidence.**
+- *soyjak.wiki / soyjak.party*: both 403 behind Cloudflare challenges (probed
+  2026-08-31). Same verdict as TikTok (§44): challenge-solving scrapers are
+  brittle ToS-gray infrastructure a money bot must not depend on. Their
+  culture surfaces on the chans minutes later, where the API is official.
+- *Tor/onion "deep net" sources*: declined, operator-accepted. Unreliable
+  infrastructure, uncontrollable content liability, and the signal argument
+  fails on its own terms — memes break OUT on public sites, which is where
+  the bot already is.
+- *A corroboration bypass for single-source "cult obsession"*: the
+  single-family gate is the anti-noise rail the tuner itself just tightened
+  (§44). Obsession intensity is captured by acceleration plus the wider
+  fringe coverage feeding MORE families, not by weakening the gate.

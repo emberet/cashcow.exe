@@ -12,6 +12,8 @@ import { hackernewsFeed } from "./hackernews.ts";
 import { googleNewsFeed } from "./googleNews.ts";
 import { wikipediaFeed } from "./wikipedia.ts";
 import { watchlistFeed } from "./watchlist.ts";
+import { knowYourMemeFeed } from "./knowYourMeme.ts";
+import { urbanDictionaryFeed } from "./urbanDictionary.ts";
 import { log, errFields } from "../util/log.ts";
 
 const ALL: Record<string, FeedAdapter> = {
@@ -27,6 +29,8 @@ const ALL: Record<string, FeedAdapter> = {
   googleNews: googleNewsFeed,
   wikipedia: wikipediaFeed,
   watchlist: watchlistFeed,
+  knowYourMeme: knowYourMemeFeed,
+  urbanDictionary: urbanDictionaryFeed,
 };
 
 export type FeedKey = keyof Config["feeds"];
