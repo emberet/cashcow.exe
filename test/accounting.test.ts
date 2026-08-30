@@ -170,16 +170,16 @@ describe("distribution ledger", () => {
 
 // ==================================================================
 // Migration additivity: each new migration must not disturb earlier ones.
-// v8 only adds an index (idx_signals_dedupe); v9 and v10 each only add one
-// nullable column (peak_volume_h24_usd, source_url), so the table list is
-// unchanged by any of them.
+// v8 only adds an index (idx_signals_dedupe); v9, v10 and v11 each only add
+// one column with a safe default (peak_volume_h24_usd, source_url,
+// zero_balance_strikes), so the table list is unchanged by any of them.
 // ==================================================================
 
-describe("migration v10 is purely additive", () => {
-  test("a fresh database lands at user_version 10 with earlier tables intact", () => {
+describe("migrations are purely additive", () => {
+  test("a fresh database lands at the current user_version with earlier tables intact", () => {
     const db = openMemoryDb();
     const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-    assert.equal(version, 10);
+    assert.equal(version, 11);
 
     const tables = new Set(
       (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>)

@@ -24,7 +24,37 @@ export type Valuation = {
   multiple: number;
 };
 
-/** Base units of `mint` currently held by the dev wallet. */
+/**
+ * Error for "the balance could not be READ", as distinct from "the balance is
+ * zero". The catch-all that used to collapse both into BN(0) cost real money:
+ * three positions were written off as no_balance during a 30-second RPC blip
+ * while the wallet held 1.76M tokens of each the whole time -- verified
+ * on-chain afterwards. Zero is a fact about the account; a failed read is a
+ * fact about the network, and only the first may drive an exit decision.
+ * See DECISIONS #43.
+ */
+export class BalanceUnavailableError extends Error {
+  constructor(mint: string, cause: unknown) {
+    super(`token balance for ${mint} could not be read: ${String(cause).slice(0, 160)}`);
+    this.name = "BalanceUnavailableError";
+  }
+}
+
+/** The RPC's way of saying the ATA legitimately does not exist. */
+function isAccountNotFound(e: unknown): boolean {
+  const msg = String((e as Error)?.message ?? e).toLowerCase();
+  return msg.includes("could not find account") || msg.includes("invalid param");
+}
+
+/**
+ * Base units of `mint` currently held by the dev wallet.
+ *
+ * Returns BN(0) ONLY when the RPC affirmatively reports the account absent --
+ * an account that was never created or was closed after emptying. Every other
+ * failure (timeout, 429, transport error) throws BalanceUnavailableError so
+ * the caller can retry later instead of mistaking an outage for an empty
+ * wallet.
+ */
 export async function tokenBalance(cfg: Config, mint: string): Promise<BN> {
   const conn = getConnection(cfg);
   const wallet = loadWallet(cfg);
@@ -32,8 +62,9 @@ export async function tokenBalance(cfg: Config, mint: string): Promise<BN> {
   try {
     const res = await conn.getTokenAccountBalance(ata, cfg.rpc.commitment);
     return new BN(res.value.amount);
-  } catch {
-    return new BN(0); // no account yet, or already emptied
+  } catch (e) {
+    if (isAccountNotFound(e)) return new BN(0); // affirmatively absent
+    throw new BalanceUnavailableError(mint, e);
   }
 }
 

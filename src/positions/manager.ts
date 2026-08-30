@@ -3,9 +3,10 @@ import type { Config } from "../config/schema.ts";
 import type { BudgetGuard } from "../risk/budget.ts";
 import {
   listOpen, closePosition, recordSellFailure, recoveredSolFromLedger,
+  recordZeroBalanceStrike, clearZeroBalanceStrikes,
   type PositionRow,
 } from "./store.ts";
-import { valuePosition, sellAll, isProtectedMint } from "../chain/trade.ts";
+import { valuePosition, sellAll, isProtectedMint, BalanceUnavailableError } from "../chain/trade.ts";
 import { log, errFields } from "../util/log.ts";
 
 /**
@@ -146,12 +147,35 @@ async function evaluateOne(
     return d.exit && d.reason === "max_hold" ? { reason: d.reason, detail: d.detail } : undefined;
   }
 
-  const value = await valuePosition(cfg, pos.mint, pos.entry_sol);
+  let value: Awaited<ReturnType<typeof valuePosition>>;
+  try {
+    value = await valuePosition(cfg, pos.mint, pos.entry_sol);
+  } catch (e) {
+    if (e instanceof BalanceUnavailableError) {
+      // The read failed; the balance is UNKNOWN, not zero. Skip this tick
+      // without consuming a sell attempt -- an RPC outage must not be able to
+      // walk a healthy position into "stuck", and it must never trigger the
+      // no_balance path below. See DECISIONS #43.
+      log.warn("balance unreadable, holding position untouched this tick", {
+        mint: pos.mint, ...errFields(e),
+      });
+      return undefined;
+    }
+    throw e;
+  }
 
-  // The wallet no longer holds the token. That does NOT mean the money is
-  // gone -- far more often it means the sell already landed and this is the
-  // retry looking at the aftermath. Ask the ledger before writing anything off.
+  // The RPC affirmatively reported the account absent. Even that is not
+  // acted on from a single read: three positions were once written off
+  // during a 30s RPC blip while their tokens sat in the wallet the whole
+  // time. Two consecutive ticks must agree before the books close.
   if (value.tokens === "0") {
+    const strikes = recordZeroBalanceStrike(db, pos.id);
+    if (strikes < 2) {
+      log.warn("zero balance read, awaiting confirmation on next tick", {
+        mint: pos.mint, strikes,
+      });
+      return undefined;
+    }
     const recovered = recoveredSolFromLedger(db, pos.mint, pos.opened_at, pos.dry_run);
 
     closePosition(db, pos.id, {
@@ -177,6 +201,8 @@ async function evaluateOne(
     }
     return undefined;
   }
+
+  clearZeroBalanceStrikes(db, pos.id);
 
   const decision = decideExit(value.multiple, ageMinutes, cfg.devPosition.exit);
   if (!decision.exit) {

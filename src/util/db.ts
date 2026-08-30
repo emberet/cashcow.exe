@@ -317,6 +317,17 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE launches ADD COLUMN source_url TEXT;
   `,
+
+  // v11 -- consecutive affirmative-zero balance reads for an open position.
+  // One zero read is not proof the tokens are gone: an RPC blip once read as
+  // zero and wrote off three positions whose tokens were still in the wallet
+  // (DECISIONS #43). A position may only close as no_balance after the RPC
+  // has affirmatively reported the account absent on two separate ticks;
+  // any nonzero read resets the count. Persisted rather than in-memory so a
+  // process restart between the two reads does not erase the first strike.
+  `
+  ALTER TABLE positions ADD COLUMN zero_balance_strikes INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /**

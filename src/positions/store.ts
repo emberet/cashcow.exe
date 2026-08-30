@@ -19,6 +19,7 @@ export type PositionRow = {
   last_error: string | null;
   realized_pnl_sol: number | null;
   dry_run: number;
+  zero_balance_strikes: number;
 };
 
 export type OpenArgs = {
@@ -131,6 +132,26 @@ export function listOrphanedByMode(db: Db, currentDryRun: boolean): PositionRow[
   return db.prepare(
     `SELECT * FROM positions WHERE status = 'open' AND dry_run = ? ORDER BY opened_at`,
   ).all(currentDryRun ? 0 : 1) as PositionRow[];
+}
+
+/**
+ * Count an affirmative zero-balance read; returns the new strike count.
+ * Closing as no_balance requires two -- see the v11 migration comment.
+ */
+export function recordZeroBalanceStrike(db: Db, id: number): number {
+  db.prepare(
+    `UPDATE positions SET zero_balance_strikes = zero_balance_strikes + 1 WHERE id = ?`,
+  ).run(id);
+  const row = db.prepare(`SELECT zero_balance_strikes s FROM positions WHERE id = ?`)
+    .get(id) as { s: number };
+  return row.s;
+}
+
+/** A nonzero balance clears the count -- strikes must be consecutive. */
+export function clearZeroBalanceStrikes(db: Db, id: number): void {
+  db.prepare(
+    `UPDATE positions SET zero_balance_strikes = 0 WHERE id = ? AND zero_balance_strikes != 0`,
+  ).run(id);
 }
 
 export function recordSellFailure(db: Db, id: number, err: string, maxAttempts: number): "retry" | "stuck" {
