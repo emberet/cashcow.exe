@@ -1,0 +1,34 @@
+# The bot: trend detection, launches, exits, fee claims, X posts, and the
+# ADMIN dashboard on 127.0.0.1:4600. systemd equivalent of the Mac's
+# com.cashcow.bot LaunchAgent.
+#
+# ONE WRITER PER WALLET: withBalanceLock() is process-local (CLAUDE.md), so
+# this unit must never run while another process anywhere signs with the same
+# wallet-keypair.json. The migration runbook's cutover order exists for this.
+[Unit]
+Description=cashcow.exe bot (launches + admin dashboard, loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cashcow
+WorkingDirectory=/opt/cashcow
+# .env is loaded by the app itself (process.loadEnvFile); no EnvironmentFile,
+# so secrets never appear in systemd's environment or `systemctl show`.
+ExecStart=/usr/bin/node src/cli.ts run --web
+Restart=always
+RestartSec=10
+# A wedged RPC call should not hold the process hostage on shutdown.
+TimeoutStopSec=30
+# The bot is small; a leak should restart it rather than eat the box.
+MemoryMax=1G
+# Never write outside its own tree.
+ProtectSystem=strict
+ReadWritePaths=/opt/cashcow
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

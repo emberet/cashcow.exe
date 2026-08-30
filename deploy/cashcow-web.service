@@ -1,0 +1,26 @@
+# The PUBLIC-ONLY dashboard on 127.0.0.1:4601 (TRENDBOT_CONFIG=
+# public.config.json, adminEnabled:false). This is the only port the
+# cloudflared tunnel may point at -- see the config.yml comment: pointing the
+# tunnel at 4600 would publish the admin portal to the internet.
+[Unit]
+Description=cashcow.exe public dashboard (loopback only, no admin, no wallet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cashcow
+WorkingDirectory=/opt/cashcow
+Environment=TRENDBOT_CONFIG=public.config.json
+ExecStart=/usr/bin/node src/cli.ts web
+Restart=always
+RestartSec=10
+MemoryMax=512M
+ProtectSystem=strict
+ReadWritePaths=/opt/cashcow
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
