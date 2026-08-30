@@ -22,6 +22,7 @@ import { claimCreatorFees } from "../chain/fees.ts";
 import { getBalanceSol } from "../chain/rpc.ts";
 import { loadWallet, publishWalletAddress } from "../chain/wallet.ts";
 import { notifyLaunch } from "../social/telegram.ts";
+import { postLaunchAnnouncement, postSessionUpdate } from "../social/announce.ts";
 import { openPosition } from "../positions/store.ts";
 import { evaluateOpenPositions } from "../positions/manager.ts";
 import { kvGet, kvSet } from "../util/db.ts";
@@ -140,6 +141,7 @@ export async function runLoop(
       try {
         await launchTick(db, cfg, budget, kill, ctx);
         await maybeClaimFees(db, cfg, budget);
+        await maybePostSessionUpdate(db, cfg, budget);
         await maybeTune(db, cfg);
         pruneSignals(db, cfg.scoring.maxSignalAgeMinutes * 60_000 * 4);
       } catch (e) {
@@ -447,10 +449,13 @@ async function launchCandidate(
     safeHttpUrl(candidate.sampleUrl),
   );
 
-  // Operator alert. Real launches only -- a dry run must never look like a
-  // live one in the operator's phone. Never throws (see social/telegram.ts).
+  // Real launches only -- a dry run must never look like a live one, either
+  // in the operator's phone (telegram) or on the public account (X). Both
+  // are best-effort by construction: never throw, never affect the launch
+  // they describe.
   if (!isPretend(cfg)) {
     await notifyLaunch(identity, result.mint, cfg, candidate);
+    await postLaunchAnnouncement(identity, result.mint, cfg, budget, thesisUrl ?? undefined);
   }
 
   const { solDelta: launchCost, measured } = resolveLaunchCost(cfg, result, devBuySol);
@@ -565,6 +570,59 @@ async function maybeTune(db: Db, cfg: Config): Promise<void> {
   } catch (e) {
     log.warn("tuning run failed", errFields(e));
   }
+}
+
+const LAST_SESSION_UPDATE = "lastSessionUpdateMs";
+
+/**
+ * Post the scheduled X session summary when a configured UTC time has been
+ * crossed since the last post. Same idiom as maybeClaimFees(): a kv
+ * timestamp, checked on the slow tick, so a restart cannot double-post and a
+ * long outage posts once (not once per missed slot). Times live in
+ * social.xAnnounce.updateTimesUtc; empty means never -- enabling
+ * announcements alone must not start a schedule the operator did not set.
+ */
+async function maybePostSessionUpdate(db: Db, cfg: Config, budget: BudgetGuard): Promise<void> {
+  const times = cfg.social.xAnnounce.updateTimesUtc;
+  if (!cfg.social.xAnnounce.enabled || times.length === 0) return;
+  if (isPretend(cfg)) return; // play money must never produce a real public post
+
+  const now = Date.now();
+  const last = Number(kvGet(db, LAST_SESSION_UPDATE) ?? 0);
+
+  // Most recent scheduled slot at or before now (today's, or yesterday's if
+  // none has passed yet today).
+  const today = new Date(now).toISOString().slice(0, 10);
+  const slots = times
+    .map((t) => Date.parse(`${today}T${t}:00Z`))
+    .map((ms) => (ms > now ? ms - 86_400_000 : ms))
+    .sort((a, b) => b - a);
+  const due = slots[0];
+  if (due === undefined || last >= due) return;
+
+  const day = now - 86_400_000;
+  const stats = {
+    launches24h: (db.prepare(
+      `SELECT COUNT(*) n FROM launches WHERE created_at > ? AND dry_run = 0`,
+    ).get(day) as { n: number }).n,
+    feesClaimedSol: (db.prepare(
+      `SELECT COALESCE(SUM(sol_amount), 0) s FROM fee_claims WHERE dry_run = 0 AND ts > ?`,
+    ).get(day) as { s: number }).s,
+    realizedPnlSol: (db.prepare(
+      `SELECT COALESCE(SUM(realized_pnl_sol), 0) s FROM positions
+        WHERE status = 'closed' AND dry_run = 0 AND closed_at > ?`,
+    ).get(day) as { s: number }).s,
+    openPositions: (db.prepare(
+      `SELECT COUNT(*) n FROM positions WHERE status = 'open' AND dry_run = 0`,
+    ).get() as { n: number }).n,
+  };
+
+  const posted = await postSessionUpdate(cfg, budget, stats);
+  // Mark the slot consumed even on failure: retrying a billable post every
+  // slow tick until it succeeds is a way to burn the write meter on an
+  // outage, and a missed summary is harmless.
+  kvSet(db, LAST_SESSION_UPDATE, String(now));
+  if (posted) log.info("session update schedule advanced", { due: new Date(due).toISOString() });
 }
 
 async function maybeClaimFees(db: Db, cfg: Config, budget: BudgetGuard): Promise<void> {
