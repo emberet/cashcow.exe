@@ -21,6 +21,9 @@ keypair*.json
 *keypair*.json
 data/*keypair*.json
 .DS_Store
+# Exported corpus: a point-in-time snapshot of the DB, 3MB+ and regenerable
+# with scripts/export-corpus.ts -- history for the hard drive, not for git.
+data/export/
 data/*.bak*
 # `data/*.bak*` does NOT cover `bot.db.backup-<timestamp>`, which is the name
 # the DB backups actually use -- verified with `git check-ignore`. A 72MB
