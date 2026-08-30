@@ -44,6 +44,14 @@ type UsersByResponse = { data?: Array<{ id: string; username: string }> };
 
 const ID_CACHE_KEY = "watchlistUserIds";      // username(lower) -> id, JSON
 const SINCE_KEY = "watchlistSinceIds";        // userId -> since_id, JSON
+const NORMAL_TIER_KEY = "watchlistLastNormalPoll"; // epoch ms, plain string
+
+/**
+ * A megaphone's post has reach by construction -- 200M followers do not need
+ * to like a tweet before it matters. The floor lifts the `reach` component
+ * for priority-tier signals without touching any gate.
+ */
+const PRIORITY_RAWSCORE_FLOOR = 0.35;
 
 function readJson(db: Db | undefined, key: string): Record<string, string> {
   if (!db) return {};
@@ -74,14 +82,14 @@ async function resolveUserIds(ctx: FeedContext, handles: string[]): Promise<Reco
 export const watchlistFeed: FeedAdapter = {
   id: "watchlist",
   weight: 1.5,
-  pollSeconds: 900,
+  pollSeconds: 300, // == the priority tier; normal handles gate themselves below
 
   readiness(ctx: FeedContext) {
     if (!process.env.X_BEARER_TOKEN) {
       return { ready: false, reason: "X_BEARER_TOKEN not set" };
     }
     const c = ctx.cfg.feeds.watchlist;
-    if (c.handles.length === 0) {
+    if (c.handles.length === 0 && c.priorityHandles.length === 0) {
       return { ready: false, reason: "no handles configured" };
     }
     const used = ctx.budget.meterUsed(METER_KEY);
@@ -97,18 +105,32 @@ export const watchlistFeed: FeedAdapter = {
     const cap = ctx.cfg.feeds.xApi.monthlyUsdCap;
     const perRead = ctx.cfg.feeds.xApi.estimatedCostPerRead;
 
-    const ids = await resolveUserIds(ctx, c.handles);
+    // Priority handles ride every pass; normal handles only when their own
+    // slower cadence has elapsed (kv timestamp, same idiom as since_ids).
+    // Dedupe favours priority so a handle listed in both tiers is fast.
+    const now = Date.now();
+    const lastNormal = ctx.db ? Number(kvGet(ctx.db, NORMAL_TIER_KEY) ?? 0) : 0;
+    const normalDue = now - lastNormal >= c.normalTierSeconds * 1000;
+    const prioritySet = new Set(c.priorityHandles.map((h) => h.toLowerCase()));
+    const roster = [
+      ...c.priorityHandles,
+      ...(normalDue ? c.handles.filter((h) => !prioritySet.has(h.toLowerCase())) : []),
+    ];
+    if (normalDue && ctx.db) kvSet(ctx.db, NORMAL_TIER_KEY, String(now));
+
+    const ids = await resolveUserIds(ctx, roster);
     const since = readJson(ctx.db, SINCE_KEY);
     const out: RawSignal[] = [];
 
-    for (const handle of c.handles) {
+    for (const handle of roster) {
       const id = ids[handle.toLowerCase()];
       if (!id) continue; // suspended/renamed; resolveUserIds will retry later
 
       // Worst case charged before the request, reconciled after -- the same
       // shape as xApi.poll(). since_id keeps the normal case cheap: only
       // tweets never seen before come back, so quiet accounts cost nothing.
-      const estimate = c.maxResultsPerUser * perRead;
+      const perRequest = ctx.cfg.feeds.xApi.estimatedCostPerRequest;
+      const estimate = Math.max(c.maxResultsPerUser * perRead, perRequest);
       if (!ctx.budget.meterCharge(METER_KEY, estimate, cap)) {
         log.warn("watchlist poll stopped mid-list: X read budget exhausted", {
           used: ctx.budget.meterUsed(METER_KEY), cap, remainingHandles: handle,
@@ -129,7 +151,11 @@ export const watchlistFeed: FeedAdapter = {
         });
 
         const actualReads = json.meta?.result_count ?? json.data?.length ?? c.maxResultsPerUser;
-        const overcharge = estimate - Math.min(actualReads, c.maxResultsPerUser) * perRead;
+        // Refund down to what came back -- but never below the per-request
+        // floor: an empty since_id response is the COMMON case here, and
+        // metering it as free would hide real spend if X bills per request.
+        const owed = Math.max(Math.min(actualReads, c.maxResultsPerUser) * perRead, perRequest);
+        const overcharge = estimate - owed;
         if (overcharge > 0) ctx.budget.meterRefund(METER_KEY, overcharge);
 
         if (json.meta?.newest_id) {
@@ -146,16 +172,18 @@ export const watchlistFeed: FeedAdapter = {
           const created = t.created_at && !Number.isNaN(Date.parse(t.created_at))
             ? new Date(t.created_at) : new Date();
 
+          const isPriority = prioritySet.has(handle.toLowerCase());
+          // Higher knee than xApi's 5k: these accounts saturate engagement
+          // metrics on every post, and the knee keeps rawScore
+          // discriminating between their ordinary posts and viral ones.
+          const base = logNorm(engagement, 50_000);
           out.push({
             feed: "watchlist",
             term: text.slice(0, 200),
-            // These accounts saturate engagement metrics on every post, so a
-            // higher knee than xApi's 5k keeps rawScore discriminating
-            // between their ordinary posts and their viral ones.
-            rawScore: logNorm(engagement, 50_000),
+            rawScore: isPriority ? Math.max(base, PRIORITY_RAWSCORE_FLOOR) : base,
             observedAt: created,
             url: t.id ? `https://x.com/${handle}/status/${t.id}` : undefined,
-            meta: { handle, engagement },
+            meta: { handle, engagement, priority: isPriority },
           });
         }
       } catch (e) {
@@ -166,7 +194,8 @@ export const watchlistFeed: FeedAdapter = {
     }
 
     log.debug("watchlist poll", {
-      handles: c.handles.length, signals: out.length,
+      polled: roster.length, priority: c.priorityHandles.length,
+      normalTier: normalDue ? "included" : "skipped", signals: out.length,
       meterUsed: ctx.budget.meterUsed(METER_KEY),
     });
     return out;

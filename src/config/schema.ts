@@ -243,6 +243,17 @@ export const feedsSchema = z.object({
     /** Metered separately from SOL spend so a polling bug cannot run up a bill. */
     monthlyUsdCap: z.number().positive().default(25),
     estimatedCostPerRead: z.number().positive().default(0.005),
+    /**
+     * Floor charged per REQUEST regardless of how few posts come back.
+     * Whether X bills per request or per post read is still unresolved
+     * (DECISIONS #42 correction), and since_id makes empty responses the
+     * COMMON case on timeline polling -- metering those as free would leave
+     * real spend invisible if billing is per-request. max(reads x perRead,
+     * perRequest) is conservative in both worlds; dashboard calibration
+     * corrects it later. Safe-by-default: over-metering can only make feeds
+     * pause early, never overspend.
+     */
+    estimatedCostPerRequest: z.number().nonnegative().default(0.005),
   }).default({}),
   watchlist: z.object({
     ...feedBase,
@@ -254,8 +265,19 @@ export const feedsSchema = z.object({
      * any token named after the person (operator decision, 2026-08-30).
      */
     handles: z.array(z.string()).default([]),
-    /** 15min: a celebrity meme's window is hours; polling faster buys reads, not alpha. */
-    pollSeconds: z.number().positive().default(900),
+    /**
+     * HIGH-ALERT tier (operator directive 2026-08-31): polled on every
+     * adapter pass while `handles` wait for normalTierSeconds. Their signals
+     * also carry a reach floor (see watchlist.ts) -- a megaphone's post has
+     * reach by construction. "Priority" buys freshness and scoring weight,
+     * NEVER a gate: filters, dedupe, saturation and BudgetGuard are
+     * untouched.
+     */
+    priorityHandles: z.array(z.string()).default([]),
+    /** Adapter cadence == the priority tier's cadence. */
+    pollSeconds: z.number().positive().default(300),
+    /** Normal-tier handles poll at most this often. */
+    normalTierSeconds: z.number().positive().default(900),
     /** 5 is the API minimum page; since_id keeps quiet accounts near-free. */
     maxResultsPerUser: z.number().int().min(5).max(100).default(5),
     /** These accounts start memes; upweighted accordingly. */
@@ -265,7 +287,15 @@ export const feedsSchema = z.object({
     ...feedBase,
     enabled: z.boolean().default(true),
     pollSeconds: z.number().positive().default(120),
+    /** Kept for config compat; merged into `boards` at read time. */
     board: z.string().default("biz"),
+    /**
+     * All boards read per poll. Every board still tags its signals
+     * `fourchan` and shares ONE independence family: four boards of one
+     * site are one population, and splitting them would inflate
+     * corroboration exactly the way independence.ts warns against.
+     */
+    boards: z.array(z.string()).default(["biz"]),
     /** Very noisy. Down-weighted relative to mainstream feeds. */
     weight: z.number().min(0).default(0.6),
   }).default({}),
@@ -298,6 +328,20 @@ export const feedsSchema = z.object({
     weight: z.number().min(0).default(0.9),
     /** Topic-scoped RSS; empty means the general front page. */
     topic: z.string().default(""),
+  }).default({}),
+  knowYourMeme: z.object({
+    ...feedBase,
+    /** Ships off (new features ship off); scrape-brittle by nature. */
+    enabled: z.boolean().default(false),
+    pollSeconds: z.number().positive().default(1800),
+    weight: z.number().min(0).default(0.8),
+  }).default({}),
+  urbanDictionary: z.object({
+    ...feedBase,
+    /** Ships off (new features ship off). */
+    enabled: z.boolean().default(false),
+    pollSeconds: z.number().positive().default(3600),
+    weight: z.number().min(0).default(0.7),
   }).default({}),
   wikipedia: z.object({
     ...feedBase,
