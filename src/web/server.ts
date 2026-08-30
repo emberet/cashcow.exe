@@ -17,6 +17,7 @@ import {
 } from "./auth.ts";
 import { enqueue, COMMAND_KINDS, type CommandKind } from "./commands.ts";
 import { log, errFields } from "../util/log.ts";
+import { notifyCtoApplication } from "../social/telegram.ts";
 
 /**
  * Dashboard server.
@@ -236,6 +237,14 @@ async function handle(
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(mint, xHandle, wallet, pitch.slice(0, 1000), throttleKey, Date.now());
     auditAction(db, "cto_application", `${xHandle} -> ${mint.slice(0, 8)}`, ip);
+
+    // Operator hears about it immediately (telegram, fire-and-forget --
+    // notifyCtoApplication never throws, so a Telegram blip cannot fail an
+    // application that is already stored).
+    const coin = db.prepare(`SELECT symbol FROM launches WHERE mint = ? LIMIT 1`)
+      .get(mint) as { symbol?: string } | undefined;
+    void notifyCtoApplication(cfg, { mint, xHandle, wallet, pitch, symbol: coin?.symbol ?? null });
+
     return sendJson(res, 200, { ok: true });
   }
 
