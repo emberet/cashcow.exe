@@ -130,3 +130,23 @@ describe("analogy popup", () => {
     assert.match(popup, /not live yet/i, "must not imply the holder split is active");
   });
 });
+
+/**
+ * RFC 9116, served from `.well-known/` so security researchers have a
+ * documented disclosure path. Points at GitHub's security-advisory form
+ * rather than a personal email, so there is nothing to redact if this file
+ * is ever quoted back verbatim.
+ */
+describe("security.txt", () => {
+  test("exists and has the fields RFC 9116 requires", async () => {
+    const txt = await readFile(join(PUBLIC_DIR, ".well-known", "security.txt"), "utf8");
+
+    const contact = txt.match(/^Contact:\s*(\S+)/m)?.[1];
+    assert.ok(contact, "no Contact: field");
+    assert.match(contact!, /^https:\/\//, "Contact should be a URL, not a bare email");
+
+    const expires = txt.match(/^Expires:\s*(\S+)/m)?.[1];
+    assert.ok(expires, "no Expires: field");
+    assert.ok(new Date(expires!).getTime() > Date.now(), "Expires must be in the future");
+  });
+});
