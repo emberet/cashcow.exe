@@ -717,3 +717,47 @@ try {
 } catch {
   openAnalogy();
 }
+
+// --- CTO application form -------------------------------------------------
+// CSP forbids inline handlers; everything wires here. The endpoint validates
+// for real (mint must be one of the cow's coins); this only keeps honest
+// users from a round trip.
+(function wireCtoForm() {
+  const form = document.getElementById("cto-form");
+  if (!form) return;
+  const status = document.getElementById("cto-status");
+  const btn = document.getElementById("cto-submit");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    status.className = "label";
+    status.textContent = "sending…";
+    btn.disabled = true;
+    try {
+      const res = await fetch("/api/cto-apply", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          mint: document.getElementById("cto-mint").value.trim(),
+          xHandle: document.getElementById("cto-handle").value.trim(),
+          wallet: document.getElementById("cto-wallet").value.trim(),
+          pitch: document.getElementById("cto-pitch").value.trim(),
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        status.className = "label ok";
+        status.textContent = "moo — application received. the barn will look.";
+        form.reset();
+      } else {
+        status.className = "label err";
+        status.textContent = body.error || `rejected (HTTP ${res.status})`;
+      }
+    } catch {
+      status.className = "label err";
+      status.textContent = "could not reach the barn — try again";
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
