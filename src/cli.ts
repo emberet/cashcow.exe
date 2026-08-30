@@ -130,7 +130,7 @@ async function main() {
   const db = openDb(cfg.storage.dbPath);
   const budget = new BudgetGuard(db, cfg);
   const kill = new KillSwitch(cfg.storage.haltFile);
-  const ctx: FeedContext = { cfg, budget };
+  const ctx: FeedContext = { cfg, budget, db };
 
   switch (cmd) {
     case "feeds": {

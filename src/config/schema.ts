@@ -130,6 +130,14 @@ export const scoringSchema = z.object({
   threshold: z.number().min(0).max(100).default(65),
   weights: z.object({
     velocity: z.number().default(0.35),
+    /**
+     * The second derivative: is the mention RATE itself climbing in the last
+     * sixth of the window? Ships at 0 -- inert until the operator or the
+     * tuner (scoring.weights.* is TUNABLE, [0..0.6] +-0.05/run) raises it.
+     * The component is computed and logged regardless, so there is evidence
+     * to raise it on. See accelerationOf() in scoring/score.ts.
+     */
+    acceleration: z.number().default(0),
     corroboration: z.number().default(0.25),
     cryptoAffinity: z.number().default(0.2),
     tickerability: z.number().default(0.1),
@@ -235,6 +243,23 @@ export const feedsSchema = z.object({
     /** Metered separately from SOL spend so a polling bug cannot run up a bill. */
     monthlyUsdCap: z.number().positive().default(25),
     estimatedCostPerRead: z.number().positive().default(0.005),
+  }).default({}),
+  watchlist: z.object({
+    ...feedBase,
+    /** Off by default: costs X API reads, and an empty handle list is inert. */
+    enabled: z.boolean().default(false),
+    /**
+     * Accounts that CAUSE memes rather than reporting them. Only their
+     * PHRASES enter the pipeline -- the brand/likeness filters still reject
+     * any token named after the person (operator decision, 2026-08-30).
+     */
+    handles: z.array(z.string()).default([]),
+    /** 15min: a celebrity meme's window is hours; polling faster buys reads, not alpha. */
+    pollSeconds: z.number().positive().default(900),
+    /** 5 is the API minimum page; since_id keeps quiet accounts near-free. */
+    maxResultsPerUser: z.number().int().min(5).max(100).default(5),
+    /** These accounts start memes; upweighted accordingly. */
+    weight: z.number().min(0).default(1.5),
   }).default({}),
   fourchan: z.object({
     ...feedBase,

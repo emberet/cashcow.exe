@@ -11,6 +11,7 @@ import { dexActivityFeed } from "./dexActivity.ts";
 import { hackernewsFeed } from "./hackernews.ts";
 import { googleNewsFeed } from "./googleNews.ts";
 import { wikipediaFeed } from "./wikipedia.ts";
+import { watchlistFeed } from "./watchlist.ts";
 import { log, errFields } from "../util/log.ts";
 
 const ALL: Record<string, FeedAdapter> = {
@@ -25,6 +26,7 @@ const ALL: Record<string, FeedAdapter> = {
   hackernews: hackernewsFeed,
   googleNews: googleNewsFeed,
   wikipedia: wikipediaFeed,
+  watchlist: watchlistFeed,
 };
 
 export type FeedKey = keyof Config["feeds"];

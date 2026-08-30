@@ -1510,3 +1510,70 @@ This is the same failure family as §39/§41/§42 seen from the other side:
 those invented *outcomes* from unreconciled estimates; this invented an
 outcome from an unverified read. The shared rule is that nothing that moves
 the books may act on a value the chain has not affirmatively stated.
+
+## 44. Finding trends before they pop: what day 1's data actually said
+
+Twenty-five settled launches is a small sample, but three of its findings
+were loud enough to act on, and one was loud enough that the tuner acted on
+it first.
+
+**The tuner's first real run agreed with the human analysis.** At 22 settled
+outcomes it raised `scoring.threshold` 65→70, `minCorroboratingFeeds` 1→2,
+and shifted weight from cryptoAffinity/tickerability toward corroboration —
+its own reasoning: *"21 of 22 launches rested on a single source family,
+which is the most obvious structural leak."* The same analysis done by hand
+found 24/25 single-family and fourchan 9-for-9 duds. Two independent readers
+of the same evidence converging is the system working as designed.
+
+**Acceleration (`scoring.weights.acceleration`).** `velocityOf()` compares
+the window's halves — 90-minute buckets that say "busier lately".
+`accelerationOf()` compares the last sixth (30 minutes) against the
+per-minute rate of everything before it: the second derivative, which is
+what "before it pops" actually means. Ships at 0 in the schema (new features
+ship off); activated at 0.15 in this deployment's config by operator
+decision, paid for out of velocity and tickerability so the sum stays 1.0.
+
+**The enumerated-list trap, found twice in one hour.** Adding the new weight
+key exposed that both `guardrails.ts`'s `WEIGHT_KEYS` and `load.ts`'s
+`assertCoherent()` sum enumerated five-key lists. The tuner renormalised the
+old five to 1.0 while config's `acceleration: 0.15` rode on top — an
+effective sum of 1.15 that silently deflated the threshold by ~13%, and the
+coherence check that exists to catch bad sums read 0.85 and *rejected the
+correct config* instead. Both now derive from the schema object itself
+(`Object.values`), and the live overlay was rescaled once by hand (×0.85 +
+acceleration 0.15) to preserve the tuner's learned ratios exactly.
+
+**Feed reliability (`learning/feedReliability.ts`).** fourchan: 9 settled, 9
+duds. 25 outcomes is too thin for a smoothed hit-rate model — at this size it
+amplifies noise — so the rule is blunt and one-sided: a family with ≥8
+settled outcomes and ZERO non-duds is dampened ×0.85 (×0.7 at ≥12), nothing
+is ever boosted, and one success resets a family to neutral instantly. A
+candidate keeps full score if ANY of its families is healthy. Recomputed from
+raw outcomes every scoring pass; no config written; changes pickiness, never
+money (invariant 3's boundary). The tuner had independently proposed trimming
+`feedWeights.fourchan` and been stopped by maxChangesPerRun — this addresses
+the same evidence structurally.
+
+**The watchlist feed (`feeds/watchlist.ts`).** Eight operator-chosen accounts
+that *cause* memes rather than reporting them. Phrases only: tweet text runs
+the identical pipeline — extractPhrases, scoring, and the brand/likeness
+screen, so a token named after the person is still rejected. That pairing is
+the operator's recorded decision (2026-08-30): watchlist on, likeness filter
+untouched. Reads bill the SAME x-api-usd meter and the same
+`feeds.xApi.monthlyUsdCap` — one read budget, two spenders, because two caps
+can starve each other invisibly. `since_id` per account keeps quiet accounts
+near-free, and the same family as xApi (`social`), because a tweet
+corroborated by a tweet is one crowd, not two.
+
+**Investigated and declined.**
+- *TikTok*: Creative Center's trend API returns 40101 "no permission" without
+  a signed session and the page 301s. Forging anonymous sessions is brittle,
+  ToS-gray scraping — the wrong dependency for a money bot. Revisit only if
+  an official trends surface appears.
+- *pump.fun thesis replies*: the replies endpoint is not discoverable on
+  frontend-api-v3 (404 on every candidate path) and posting would need
+  wallet-signature auth against an undocumented surface. The thesis already
+  travels on surfaces we control: token metadata (#26) and the X
+  announcement (#27).
+- *Polymarket*: disabled in config — 300 consecutive failures from a
+  network-level block, not a code bug. The adapter stays.

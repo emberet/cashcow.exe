@@ -1,5 +1,6 @@
 import type { Config } from "../config/schema.ts";
 import type { BudgetGuard } from "../risk/budget.ts";
+import type { Db } from "../util/db.ts";
 
 /** One observation of one term from one source at one moment. */
 export type RawSignal = {
@@ -16,6 +17,12 @@ export type FeedContext = {
   cfg: Config;
   /** Present so metered feeds (the X API) can charge against a USD cap. */
   budget: BudgetGuard;
+  /**
+   * Optional: feeds that keep cursor state (watchlist's per-account
+   * since_id) persist it in kv. Absent in some unit tests; adapters must
+   * degrade to stateless polling, never crash.
+   */
+  db?: Db;
 };
 
 export interface FeedAdapter {

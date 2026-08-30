@@ -14,7 +14,7 @@ const identity = (over: Partial<TokenIdentity> = {}): TokenIdentity => ({
 
 const candidate = (over: Partial<Candidate> = {}): Candidate => ({
   key: "trips", term: "Trips", score: 71.4,
-  components: { velocity: 1, corroboration: 0.5, cryptoAffinity: 0.85,
+  components: { velocity: 1, acceleration: 0.5, corroboration: 0.5, cryptoAffinity: 0.85,
                 tickerability: 1, reach: 0.5, decay: 0.9 },
   feeds: ["fourchan", "googleNews"], families: ["crypto", "press"],
   corroborationNote: "2 independent families (crypto + press)",

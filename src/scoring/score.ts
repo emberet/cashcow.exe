@@ -2,6 +2,7 @@ import type { Db } from "../util/db.ts";
 import type { ScoringConfig } from "../config/schema.ts";
 import type { RawSignal } from "../feeds/types.ts";
 import { extractPhrases } from "./phrases.ts";
+import { computeFeedReliability, reliabilityMultiplier } from "../learning/feedReliability.ts";
 import { cryptoAffinity, tickerability } from "./affinity.ts";
 import { clamp01 } from "../feeds/types.ts";
 import { safeHttpUrl } from "../util/http.ts";
@@ -22,6 +23,7 @@ export type Candidate = {
   score: number;
   components: {
     velocity: number;
+    acceleration: number;
     corroboration: number;
     cryptoAffinity: number;
     tickerability: number;
@@ -138,9 +140,45 @@ function velocityOf(rows: Row[], windowMs: number, now: number): number {
   return clamp01(ratio / (ratio + 1));
 }
 
+/**
+ * Acceleration: is the term's mention RATE itself climbing right now?
+ *
+ * velocityOf() compares the window's halves (90-minute buckets at the
+ * default 3h window) -- it says "busier lately". This compares the last
+ * SIXTH of the window (30 minutes) against the per-minute rate of everything
+ * before it: the second derivative, which is what "catch it before it pops"
+ * actually means. A term ticking along for two hours then doubling its rate
+ * in the last half hour lights this up while velocity still reads mild.
+ *
+ * Same ingested_at basis as velocity, for the same reason (invariant 5).
+ * 0.5 = steady, 1 = all recent, 0 = died off.
+ */
+function accelerationOf(rows: Row[], windowMs: number, now: number): number {
+  const sliceMs = windowMs / 6;
+  const cut = now - sliceMs;
+  let recent = 0, baseline = 0, baselineSpanMs = 0;
+  for (const r of rows) {
+    if (r.ingested_at >= cut) recent += r.raw_score;
+    else {
+      baseline += r.raw_score;
+      baselineSpanMs = Math.max(baselineSpanMs, cut - r.ingested_at);
+    }
+  }
+  if (recent === 0 && baseline === 0) return 0;
+  if (baseline === 0) return 1; // all activity inside the last slice: maximal
+  const recentRate = recent / sliceMs;
+  const baselineRate = baseline / Math.max(baselineSpanMs, sliceMs);
+  return clamp01(recentRate / (recentRate + baselineRate));
+}
+
 export function buildCandidates(db: Db, cfg: ScoringConfig): Candidate[] {
   const now = Date.now();
   const windowMs = cfg.maxSignalAgeMinutes * 60_000;
+
+  // Learned once per scoring pass from settled outcomes, applied per
+  // candidate below. Bounded [0.7, 1] and one-sided by construction -- see
+  // learning/feedReliability.ts for why nothing is ever boosted.
+  const reliabilityPrior = computeFeedReliability(db);
 
   const rows = db.prepare(
     `SELECT norm, term, feed, raw_score, observed_at, ingested_at, url
@@ -177,6 +215,7 @@ export function buildCandidates(db: Db, cfg: ScoringConfig): Candidate[] {
     const term = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]![0];
 
     const velocity = velocityOf(group, windowMs, now);
+    const acceleration = accelerationOf(group, windowMs, now);
     // Weighted by source independence, not raw feed count: two crypto-native
     // feeds agreeing is nearly one source talking to itself.
     const corroboration = corroborationStrength(feeds);
@@ -192,15 +231,18 @@ export function buildCandidates(db: Db, cfg: ScoringConfig): Candidate[] {
     const w = cfg.weights;
     const base =
       w.velocity * velocity +
+      w.acceleration * acceleration +
       w.corroboration * corroboration +
       w.cryptoAffinity * affinity +
       w.tickerability * tick +
       w.reach * reach;
 
+    const reliability = reliabilityMultiplier(reliabilityPrior, families);
+
     out.push({
       key, term,
-      score: clamp01(base * decay) * 100,
-      components: { velocity, corroboration, cryptoAffinity: affinity, tickerability: tick, reach, decay },
+      score: clamp01(base * decay * reliability) * 100,
+      components: { velocity, acceleration, corroboration, cryptoAffinity: affinity, tickerability: tick, reach, decay },
       feeds,
       families,
       corroborationNote: describeCorroboration(feeds),
