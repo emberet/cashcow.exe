@@ -328,6 +328,25 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE positions ADD COLUMN zero_balance_strikes INTEGER NOT NULL DEFAULT 0;
   `,
+
+  // v12 -- community-takeover (CTO) applications from the public site.
+  // Pure data: no wallet key, no money movement -- accepted applications are
+  // reviewed and paid MANUALLY by the operator, which is exactly what the
+  // public copy says. ip is the SOCKET address (invariant 10), stored for
+  // spam triage only.
+  `
+  CREATE TABLE cto_applications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    mint       TEXT    NOT NULL,
+    x_handle   TEXT    NOT NULL,
+    wallet     TEXT    NOT NULL,
+    pitch      TEXT    NOT NULL,
+    ip         TEXT,
+    status     TEXT    NOT NULL DEFAULT 'new',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_cto_mint ON cto_applications(mint);
+  `,
 ];
 
 /**

@@ -994,6 +994,14 @@ export function adminSnapshot(db: Db, cfg: Config, kill: KillSwitch, walletBalan
         applied: Number(h.applied) === 1,
       })),
     },
+    // CTO applications land from the public site (server.ts /api/cto-apply);
+    // this is where the operator reviews them. x_handle is rendered by
+    // admin.js through esc() like everything else -- pitch text is stranger
+    // input.
+    ctoApplications: db.prepare(
+      `SELECT id, mint, x_handle, wallet, substr(pitch, 1, 300) AS pitch, status, created_at
+         FROM cto_applications ORDER BY created_at DESC LIMIT 20`,
+    ).all(),
     at: Date.now(),
     status: statusOf(db, cfg, kill),
     halted: kill.isHalted(),

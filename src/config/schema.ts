@@ -95,6 +95,22 @@ export const devPositionSchema = z.object({
   enabled: z.boolean().default(true),
   buySol: solAmount.default(0.05),
   buySlippagePct: pct.default(15),
+  /**
+   * When the wallet cannot fund a launch that has cleared every gate, sell
+   * the OLDEST eligible open position(s) to free capital -- the trend in
+   * hand beats the position on the books. Exits stay on the single sellAll()
+   * choke point; protected mints are skipped; positions younger than
+   * minAgeMinutes are never churned. Realized losses from these sales still
+   * count against maxDailyLossSol -- liquidity pressure does not disarm the
+   * loss breaker.
+   */
+  liquiditySell: z.object({
+    enabled: z.boolean().default(false),
+    /** Most positions sold to cover ONE launch shortfall. */
+    maxPositionsPerShortfall: z.number().int().positive().default(2),
+    /** Never churn a position this young; it was just bought. */
+    minAgeMinutes: z.number().nonnegative().default(60),
+  }).default({}),
   exit: z.object({
     /** Sell when price reaches this multiple of entry. */
     takeProfitMultiple: z.number().min(1).default(3),

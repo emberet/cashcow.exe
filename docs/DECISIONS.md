@@ -1636,3 +1636,42 @@ lie and `ingested_at` (invariant 5) is what scoring actually uses.
   single-family gate is the anti-noise rail the tuner itself just tightened
   (§44). Obsession intensity is captured by acceleration plus the wider
   fringe coverage feeding MORE families, not by weakening the gate.
+
+## 46. Liquidity exits, the thesis in the twitter slot, and the CTO program
+
+Three operator directives, 2026-08-31.
+
+**Liquidity exits (`devPosition.liquiditySell`).** When the wallet cannot
+fund a launch that has cleared every other gate, the bot may now sell open
+positions to free capital — the trend in hand beats the position on the
+books. The discipline: oldest-first (its scheduled hold ends soonest, so
+cutting it short is the smallest distortion), never a protected mint, never
+a position younger than an hour, and the per-shortfall cap bounds ATTEMPTS
+rather than successes — a success-counted cap would, during an RPC outage,
+try every eligible position in one pass and march several toward "stuck" for
+one launch's sake (caught by the test before it shipped). Everything routes
+through `sellAll()` and `BudgetGuard.record()` like every other exit, and
+realized losses still feed `maxDailyLossSol`: liquidity pressure does not
+disarm the loss breaker. The launch gate now also passes the REAL wallet
+balance into `assertCanSpend()`, so an unfundable launch is refused at the
+gate instead of failing on-chain.
+
+**The twitter metadata slot carries the thesis, never the brand.** When a
+trend came from X, the coin's `twitter` field is the thesis tweet itself and
+`website` reverts to the project site; a non-X thesis rides `website` as
+before and `twitter` stays EMPTY. The project account no longer appears in
+the twitter slot at all — a reader clicking the X icon on pump.fun lands on
+the post the coin is about, or nowhere.
+
+**The CTO program.** Any coin the cow launched can be community-taken-over:
+a public application form (mint + X handle + SOL wallet + pitch) posting to
+`/api/cto-apply`, stored in `cto_applications` (migration v12) and surfaced
+in the admin snapshot. An accepted CTO's wallet receives **80% of that
+coin's future creator fees**, the barn keeps 20%. The public copy says — in
+the same voice as the holder-split disclaimer above it — that review and
+payout are MANUAL and human: no automation exists, an application is not a
+claim, and the site does not promise a pipe that is not built (the
+distribution.enabled precedent). Rails: the web process still never holds a
+key (applications are data; invariant 4), the throttle keys on the socket
+address (invariant 10, 5/day/IP), mint and wallet are base58-validated, and
+only real launches of this bot are accepted as targets.

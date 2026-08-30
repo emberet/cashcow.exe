@@ -18,7 +18,7 @@ import { log, errFields } from "../util/log.ts";
  * money. The runner calls this on every tick, halted or not.
  */
 
-export type ExitReason = "take_profit" | "stop_loss" | "max_hold";
+export type ExitReason = "take_profit" | "stop_loss" | "max_hold" | "liquidity";
 
 export type ExitDecision =
   | { exit: false; multiple: number; ageMinutes: number }
@@ -63,6 +63,69 @@ export type TickResult = {
   stuck: number;
   errors: number;
 };
+
+/**
+ * Free capital for a launch the wallet cannot fund: sell the OLDEST eligible
+ * open positions until the shortfall is covered or the per-shortfall cap is
+ * hit. Oldest first because its remaining scheduled hold is shortest -- the
+ * smallest distortion of the exit rules. The trend in hand beats the
+ * position on the books.
+ *
+ * Same rails as every exit: sellAll() is the choke point (never-sell rail
+ * included), proceeds are recorded through BudgetGuard, and realized losses
+ * still feed maxDailyLossSol -- liquidity pressure does not disarm the loss
+ * breaker. Protected mints and positions younger than minAgeMinutes are
+ * skipped entirely.
+ *
+ * Returns the SOL actually freed (0 when disabled or nothing eligible).
+ */
+export async function sellForLiquidity(
+  db: Db, cfg: Config, budget: BudgetGuard, shortfallSol: number,
+): Promise<number> {
+  const c = cfg.devPosition.liquiditySell;
+  if (!c.enabled || shortfallSol <= 0) return 0;
+
+  const now = Date.now();
+  const eligible = listOpen(db, cfg.dryRun).filter((p) =>
+    !isProtectedMint(cfg, p.mint) &&
+    (now - p.opened_at) / 60_000 >= c.minAgeMinutes);
+
+  // Bounds ATTEMPTS, not successes: during an RPC outage a success-counted
+  // cap would try every eligible position in one pass, marching several
+  // toward "stuck" for one launch's sake. A failed attempt consumes the
+  // slot; the next launch attempt retries.
+  let freed = 0, attempts = 0;
+  for (const pos of eligible) {
+    if (freed >= shortfallSol || attempts >= c.maxPositionsPerShortfall) break;
+    attempts++;
+    try {
+      const res = await sellAll(cfg, pos.mint, cfg.devPosition.exit.sellSlippagePct);
+      closePosition(db, pos.id, {
+        reason: "liquidity",
+        exitSol: res.solReceived,
+        exitTokens: res.tokensSold,
+        signature: res.signature,
+        entrySol: pos.entry_sol,
+      });
+      budget.record({
+        kind: "dev_sell", solDelta: res.solReceived, mint: pos.mint,
+        signature: res.signature, note: "liquidity", dryRun: !!pos.dry_run,
+      });
+      freed += res.solReceived;
+      log.info("position sold for launch liquidity", {
+        mint: pos.mint, symbol: pos.symbol, freedSol: res.solReceived,
+        ageHours: ((now - pos.opened_at) / 3600_000).toFixed(1),
+      });
+    } catch (e) {
+      // A failed liquidity sale must not block trying the next position, and
+      // it books a sell attempt so a chronically unsellable position still
+      // trends toward "stuck" for a human.
+      recordSellFailure(db, pos.id, String(errFields(e).err), cfg.devPosition.exit.maxSellAttempts);
+      log.warn("liquidity sale failed, trying next position", { mint: pos.mint, ...errFields(e) });
+    }
+  }
+  return freed;
+}
 
 export async function evaluateOpenPositions(
   db: Db, cfg: Config, budget: BudgetGuard,

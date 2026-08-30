@@ -195,6 +195,50 @@ async function handle(
     });
   }
 
+  // ------------------------------------------------------------- cto apply
+  // Public on purpose: applications are data, not money (invariant 4 -- the
+  // web process still never holds a key; accepted CTOs are paid manually by
+  // the operator). Throttled per SOCKET address (invariant 10) with the
+  // dumbest thing that works: a fixed per-IP daily cap.
+  if (path === "/api/cto-apply" && req.method === "POST") {
+    if (!cfg.web.publicEnabled) return sendJson(res, 404, { error: "not found" });
+
+    const dayAgo = Date.now() - 86_400_000;
+    const recent = (db.prepare(
+      `SELECT COUNT(*) n FROM cto_applications WHERE ip = ? AND created_at > ?`,
+    ).get(throttleKey, dayAgo) as { n: number }).n;
+    if (recent >= 5) {
+      return sendJson(res, 429, { error: "too many applications from this address today" });
+    }
+
+    const body = await readBody(req);
+    const mint = typeof body.mint === "string" ? body.mint.trim() : "";
+    const xHandle = typeof body.xHandle === "string" ? body.xHandle.trim().replace(/^@/, "") : "";
+    const wallet = typeof body.wallet === "string" ? body.wallet.trim() : "";
+    const pitch = typeof body.pitch === "string" ? body.pitch.trim() : "";
+
+    const B58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+    if (!B58.test(mint)) return sendJson(res, 400, { error: "that is not a valid mint address" });
+    if (!B58.test(wallet)) return sendJson(res, 400, { error: "that is not a valid SOL wallet" });
+    if (!/^[A-Za-z0-9_]{1,15}$/.test(xHandle)) return sendJson(res, 400, { error: "that is not a valid X handle" });
+    if (pitch.length < 20 || pitch.length > 1000) {
+      return sendJson(res, 400, { error: "pitch must be 20-1000 characters" });
+    }
+
+    // Only coins the cow actually launched can be taken over.
+    const launched = db.prepare(
+      `SELECT COUNT(*) n FROM launches WHERE mint = ? AND dry_run = 0`,
+    ).get(mint) as { n: number };
+    if (!launched.n) return sendJson(res, 400, { error: "that mint is not one of the cow's coins" });
+
+    db.prepare(
+      `INSERT INTO cto_applications (mint, x_handle, wallet, pitch, ip, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(mint, xHandle, wallet, pitch.slice(0, 1000), throttleKey, Date.now());
+    auditAction(db, "cto_application", `${xHandle} -> ${mint.slice(0, 8)}`, ip);
+    return sendJson(res, 200, { ok: true });
+  }
+
   // ---------------------------------------------------------------- public
   if (path === "/api/public") {
     if (!cfg.web.publicEnabled) return sendJson(res, 404, { error: "public dashboard disabled" });

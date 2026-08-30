@@ -773,3 +773,18 @@ a.gate.open .gate-more::after { content: " (click to close)"; }
   .readrow .src { grid-column: 1 / -1; flex-direction: row; gap: 8px; align-items: baseline; }
   .read-age { text-align: right; }
 }
+
+/* --- CTO application form (public, CSP-safe: no inline handlers) --- */
+.field {
+  width: 100%;
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  background: var(--milk);
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--ink);
+}
+.field:focus { outline: 3px solid var(--grass); outline-offset: 1px; }
+textarea.field { resize: vertical; min-height: 72px; }
+#cto-status.ok { color: var(--deep); font-weight: 700; }
+#cto-status.err { color: var(--red); font-weight: 700; }

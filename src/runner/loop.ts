@@ -24,7 +24,7 @@ import { loadWallet, publishWalletAddress } from "../chain/wallet.ts";
 import { notifyLaunch } from "../social/telegram.ts";
 import { postLaunchAnnouncement, postSessionUpdate } from "../social/announce.ts";
 import { openPosition } from "../positions/store.ts";
-import { evaluateOpenPositions } from "../positions/manager.ts";
+import { evaluateOpenPositions, sellForLiquidity } from "../positions/manager.ts";
 import { kvGet, kvSet } from "../util/db.ts";
 import { effectiveScoring } from "../risk/experimentalWindow.ts";
 import { log, errFields } from "../util/log.ts";
@@ -396,16 +396,40 @@ async function launchCandidate(
   // through safeHttpUrl() (invariant 11): feed URLs are whatever a stranger
   // typed.
   const thesisUrl = safeHttpUrl(candidate.sampleUrl);
+  // Operator directive 2026-08-31: the twitter field carries the THESIS
+  // TWEET when the trend came from X, and stays EMPTY otherwise -- never the
+  // project account (that identity lives on the website). An X-sourced
+  // thesis rides the twitter slot and frees website for the project site; a
+  // non-X thesis rides website as before.
+  const thesisIsX = !!thesisUrl && /^https?:\/\/(x\.com|twitter\.com)\//i.test(thesisUrl);
   const pinned = await pinTokenMetadata(cfg, identity, image, {
-    ...(p.twitter ? { twitter: p.twitter } : {}),
-    ...(thesisUrl ? { website: thesisUrl } : p.website ? { website: p.website } : {}),
+    ...(thesisIsX ? { twitter: thesisUrl! } : {}),
+    ...(thesisIsX
+      ? (p.website ? { website: p.website } : {})
+      : thesisUrl ? { website: thesisUrl } : p.website ? { website: p.website } : {}),
     ...(p.telegram ? { telegram: p.telegram } : {}),
   }, thesisUrl ?? undefined);
 
   const devBuySol = cfg.devPosition.enabled ? cfg.devPosition.buySol : 0;
 
-  // Last gate before money moves.
-  budget.assertCanSpend(estimate, { isLaunch: true, opensPosition: devBuySol > 0 });
+  // Last gate before money moves -- now balance-aware. When the wallet
+  // cannot fund a launch that has cleared every other gate, sell the oldest
+  // eligible position(s) to free capital (devPosition.liquiditySell), then
+  // re-check once. The floor check gets the REAL balance either way, so an
+  // unfunded launch is refused here instead of failing on-chain.
+  if (!isPretend(cfg)) {
+    let balance = await getBalanceSol(cfg, loadWallet(cfg).publicKey);
+    const shortfall = (cfg.risk.minWalletBalanceSol + estimate) - balance;
+    if (shortfall > 0) {
+      const freed = await sellForLiquidity(db, cfg, budget, shortfall);
+      if (freed > 0) balance = await getBalanceSol(cfg, loadWallet(cfg).publicKey);
+    }
+    budget.assertCanSpend(estimate, {
+      isLaunch: true, opensPosition: devBuySol > 0, walletBalanceSol: balance,
+    });
+  } else {
+    budget.assertCanSpend(estimate, { isLaunch: true, opensPosition: devBuySol > 0 });
+  }
 
   let mintKeypair: Keypair | undefined;
   if (cfg.launch.vanitySuffix) {

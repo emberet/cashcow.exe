@@ -179,7 +179,7 @@ describe("migrations are purely additive", () => {
   test("a fresh database lands at the current user_version with earlier tables intact", () => {
     const db = openMemoryDb();
     const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-    assert.equal(version, 11);
+    assert.equal(version, 12);
 
     const tables = new Set(
       (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>)
