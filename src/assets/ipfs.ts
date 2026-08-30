@@ -71,6 +71,13 @@ export async function pinTokenMetadata(
   identity: TokenIdentity,
   image: RenderedImage,
   links: { twitter?: string; telegram?: string; website?: string } = {},
+  /**
+   * The originating source link (already safeHttpUrl-validated by the
+   * caller). Appended to the description as well as riding the `website`
+   * field, because several wallets hide website while always showing the
+   * description -- the thesis should survive both renderings.
+   */
+  sourceUrl?: string,
 ): Promise<PinnedMetadata> {
   // Pinning is a real external write to a third-party service. A dry run must
   // not perform it, and skipping it also means the pipeline can be exercised
@@ -115,10 +122,18 @@ export async function pinTokenMetadata(
   const imageUri = `${gateway}${imageCid}`;
 
   // Field names follow the shape pump.fun's own metadata documents use.
+  const maxLen = cfg.assets.naming.maxTotalDescriptionLength;
+  const sourceSuffix = sourceUrl ? ` Source: ${sourceUrl}` : "";
+  // The suffix wins over the tail of the description when space is short --
+  // provenance prose is compressible, the link is not.
+  const description = sourceSuffix
+    ? identity.description.slice(0, Math.max(0, maxLen - sourceSuffix.length)) + sourceSuffix
+    : identity.description;
+
   const metadata = {
     name: identity.name,
     symbol: identity.symbol,
-    description: identity.description,
+    description,
     image: imageUri,
     showName: true,
     createdOn: "https://pump.fun",

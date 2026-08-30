@@ -386,11 +386,19 @@ async function launchCandidate(
   // accepted these and was never given any, so every launch shipped with no
   // links at all -- part of what a wallet reads as an unverified coin.
   const p = cfg.social.project;
+  // The coin's `website` is its THESIS -- the article/post/tweet the trend
+  // was detected from -- because that is the per-token fact a buyer actually
+  // wants, and the project identity already travels via `twitter`. The
+  // project site is the fallback when a candidate carries no source. Wallets
+  // and pump.fun render whatever is here as a clickable link, so it goes
+  // through safeHttpUrl() (invariant 11): feed URLs are whatever a stranger
+  // typed.
+  const thesisUrl = safeHttpUrl(candidate.sampleUrl);
   const pinned = await pinTokenMetadata(cfg, identity, image, {
     ...(p.twitter ? { twitter: p.twitter } : {}),
-    ...(p.website ? { website: p.website } : {}),
+    ...(thesisUrl ? { website: thesisUrl } : p.website ? { website: p.website } : {}),
     ...(p.telegram ? { telegram: p.telegram } : {}),
-  });
+  }, thesisUrl ?? undefined);
 
   const devBuySol = cfg.devPosition.enabled ? cfg.devPosition.buySol : 0;
 

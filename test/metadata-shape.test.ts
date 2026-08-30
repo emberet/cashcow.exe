@@ -123,3 +123,63 @@ describe("pinned metadata shape", () => {
     assert.ok(meta.properties, "file metadata must not depend on social links");
   });
 });
+
+describe("the source URL as thesis", () => {
+  // The gap this closes: every launched token carried the PROJECT's links
+  // but nothing pointing at the trend it was minted from -- launches.source_url
+  // existed in the DB and never reached the metadata a buyer actually sees.
+  test("rides the website field and is appended to the description", async () => {
+    uploads = [];
+    process.env.PINATA_JWT = "test-jwt";
+    const cfg = configSchema.parse({
+      dryRun: false, network: "mainnet-beta",
+      assets: { ipfs: { uploadUrl, gatewayUrl: "https://gw.test/ipfs" } },
+    });
+
+    await pinTokenMetadata(cfg, identity(), image(), {
+      twitter: "x.com/cashcowEXE",
+      website: "https://boards.example.com/thread/123",
+    }, "https://boards.example.com/thread/123");
+
+    const meta = pinnedJson();
+    assert.equal(meta.website, "https://boards.example.com/thread/123");
+    assert.ok(String(meta.description).endsWith("Source: https://boards.example.com/thread/123"),
+      "description must carry the thesis link for wallets that hide website");
+    // The project identity still travels.
+    assert.equal(meta.twitter, "x.com/cashcowEXE");
+  });
+
+  test("the link survives truncation -- prose is compressible, the URL is not", async () => {
+    uploads = [];
+    process.env.PINATA_JWT = "test-jwt";
+    const cfg = configSchema.parse({
+      dryRun: false, network: "mainnet-beta",
+      assets: {
+        ipfs: { uploadUrl, gatewayUrl: "https://gw.test/ipfs" },
+        naming: { maxTotalDescriptionLength: 120 },
+      },
+    });
+    const longId = { ...identity(), description: "x".repeat(200) };
+
+    await pinTokenMetadata(cfg, longId as never, image(), {},
+      "https://example.com/very/real/source");
+
+    const meta = pinnedJson();
+    const d = String(meta.description);
+    assert.ok(d.length <= 120, `description ${d.length} chars exceeds the cap`);
+    assert.ok(d.endsWith("Source: https://example.com/very/real/source"),
+      "the URL must never be the part that gets truncated");
+  });
+
+  test("no source URL means the description is untouched", async () => {
+    uploads = [];
+    process.env.PINATA_JWT = "test-jwt";
+    const cfg = configSchema.parse({
+      dryRun: false, network: "mainnet-beta",
+      assets: { ipfs: { uploadUrl, gatewayUrl: "https://gw.test/ipfs" } },
+    });
+    await pinTokenMetadata(cfg, identity(), image(), {});
+    const meta = pinnedJson();
+    assert.ok(!String(meta.description).includes("Source:"));
+  });
+});
