@@ -1448,3 +1448,65 @@ worth naming: §39 invented losses that tripped a breaker, §41 nearly invented
 Estimates written into a ledger and never reconciled against what actually
 happened all fail the same way — the safety rail fires on fiction, and the
 symptom shows up somewhere that looks unrelated to the estimate.
+
+**Correction (2026-08-30).** The mechanism above is real and the refund code
+is correct and safe — but the *diagnosis* of the meter/dashboard gap was
+wrong. A monitor watched the first three post-fix polls: all three returned
+full 25-post pages, and the refund never fired. Partial pages are not the
+common case for this query, so "~5x over-count from partial pages" does not
+explain the $43.875-metered-versus-~$9-dashboard divergence. That divergence
+remains unexplained; the leading candidate is that X bills per *request*
+rather than per post read, which would put the cost model off in its units,
+not its arithmetic. To be settled empirically: compare meter movement against
+the dashboard balance across a known interval once the next credit top-up
+lands, and recalibrate `estimatedCostPerRead` from measured reality. Until
+then the refund stays (it can only ever correct in the safe direction), and
+this note stands so the wrong explanation does not get re-learned.
+
+## 43. A failed read is not a zero balance
+
+Three positions (UNTILM, NOWU, PYSNK) were closed as `no_balance` with a full
+−0.05 write-off each, within thirty seconds of one another. All three launch
+transactions had landed (`err: null`) and delivered 1,763,352 tokens to the
+wallet — and at the moment of the write-off **the wallet still held every one
+of those tokens**, verified on-chain afterwards. −0.15 SOL of loss was booked
+on positions that were never lost, and this time §39's ledger check was no
+protection, because there genuinely was no sale on record. The tokens had
+simply never left.
+
+The cause was one catch block:
+
+```ts
+} catch {
+  return new BN(0); // no account yet, or already emptied
+}
+```
+
+`tokenBalance()` collapsed *every* failure into zero. The comment describes
+the two benign cases and the code catches all of them plus timeouts, 429s,
+and transport errors. Three positions dying in a 30-second window is the
+fingerprint of an RPC blip, not of three wallets emptying at once. Zero is a
+fact about the account; a failed read is a fact about the network — and only
+the first may drive an exit decision.
+
+Two rails now:
+
+1. `tokenBalance()` returns zero **only when the RPC affirmatively reports
+   the account absent** ("could not find account"); anything else throws
+   `BalanceUnavailableError`. The exit path catches it and skips the tick —
+   without consuming a sell attempt, because an outage must not be able to
+   walk a healthy position into "stuck" either.
+2. Even an affirmative zero closes nothing on its own. `zero_balance_strikes`
+   (migration v11, persisted so a restart cannot erase the first strike)
+   requires two consecutive ticks to agree before the books close; any
+   nonzero read resets the count. One extra tick of latency on a genuine
+   emptying, in exchange for outages being unable to write off positions.
+
+The three rows were reopened — tokens still in the wallet, so the ordinary
+exit rules (take-profit / stop-loss / 24h max-hold) dispose of them properly.
+Realized P&L moved +0.15 back to where reality was.
+
+This is the same failure family as §39/§41/§42 seen from the other side:
+those invented *outcomes* from unreconciled estimates; this invented an
+outcome from an unverified read. The shared rule is that nothing that moves
+the books may act on a value the chain has not affirmatively stated.
