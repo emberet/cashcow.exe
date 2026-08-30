@@ -109,3 +109,34 @@ describe("thesis link routing (metadata twitter field)", () => {
     assert.equal(isX("https://xx.com/a"), false);
   });
 });
+
+describe("CTO telegram notification", () => {
+  test("the message escapes stranger input and carries the 80% reminder", async () => {
+    const { ctoApplicationMessage } = await import("../src/social/telegram.ts");
+    const msg = ctoApplicationMessage({
+      mint: "2eTLB1qCCvk9aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      xHandle: "someone",
+      wallet: "9peztVGeqdCFYbvbmJ9NxKWzBW2RKU7j8n2dz2DS9zSv",
+      pitch: "I will <b>rug</b> nobody & everyone",
+      symbol: "MOTOR",
+    });
+    assert.ok(msg.includes("&lt;b&gt;rug&lt;/b&gt;"), "HTML in the pitch must be escaped");
+    assert.ok(msg.includes("&amp; everyone"));
+    assert.ok(msg.includes("for MOTOR"));
+    assert.ok(msg.includes("gets 80%"));
+    assert.ok(msg.includes("MANUAL fee payouts"),
+      "the operator-side reminder that payout is a hand-done transfer");
+  });
+
+  test("notifyCtoApplication never throws, even with no credentials", async () => {
+    const { notifyCtoApplication } = await import("../src/social/telegram.ts");
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    delete process.env.TELEGRAM_CHAT_ID;
+    const cfg = configSchema.parse({ social: { telegram: { enabled: true } } });
+    // Must resolve quietly -- a Telegram problem can never fail the POST.
+    await notifyCtoApplication(cfg, {
+      mint: "m", xHandle: "h", wallet: "w", pitch: "p", symbol: null,
+    });
+    assert.ok(true);
+  });
+});

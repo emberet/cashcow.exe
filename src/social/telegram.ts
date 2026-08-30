@@ -101,3 +101,61 @@ export async function notifyLaunch(
     log.warn("telegram notify failed", { mint, ...errFields(e) });
   }
 }
+
+/**
+ * Pure, and exported for testing. All four fields are STRANGER INPUT from
+ * the public CTO form -- esc() on every one, and the pitch is additionally
+ * length-capped upstream (server.ts). HTML parse mode for the same reason
+ * as launchMessage.
+ */
+export function ctoApplicationMessage(app: {
+  mint: string; xHandle: string; wallet: string; pitch: string; symbol?: string | null;
+}): string {
+  return [
+    `🤠 <b>CTO application</b>${app.symbol ? ` for ${esc(app.symbol)}` : ""}`,
+    `<b>Coin:</b> pump.fun/coin/${esc(app.mint)}`,
+    `<b>Applicant:</b> @${esc(app.xHandle)} — x.com/${esc(app.xHandle)}`,
+    `<b>Their wallet (gets 80%):</b> <code>${esc(app.wallet)}</code>`,
+    "",
+    `<b>Pitch:</b> ${esc(app.pitch)}`,
+    "",
+    "Review in the admin portal. Accepting means MANUAL fee payouts to that wallet.",
+  ].join("\n");
+}
+
+/**
+ * Same never-throws contract as notifyLaunch: a Telegram blip must never
+ * fail the application POST that already stored the row. Called from the
+ * PUBLIC web process -- which holds the telegram token (an alert channel)
+ * but still never the wallet key (invariant 4).
+ */
+export async function notifyCtoApplication(
+  cfg: Config,
+  app: { mint: string; xHandle: string; wallet: string; pitch: string; symbol?: string | null },
+): Promise<void> {
+  if (!cfg.social.telegram.enabled) return;
+  const creds = readCreds(cfg);
+  if (!creds) {
+    log.warn("telegram cto notify skipped: credentials not set", {
+      need: [cfg.social.telegram.botTokenEnv, cfg.social.telegram.chatIdEnv],
+    });
+    return;
+  }
+  try {
+    await httpFetch(`${API}/bot${creds.token}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chat_id: creds.chatId,
+        text: ctoApplicationMessage(app),
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      }),
+      timeoutMs: 10_000,
+      retries: 1,
+    });
+    log.info("telegram cto application sent", { xHandle: app.xHandle, mint: app.mint });
+  } catch (e) {
+    log.warn("telegram cto notify failed", errFields(e));
+  }
+}
