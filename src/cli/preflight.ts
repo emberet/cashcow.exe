@@ -298,22 +298,67 @@ function checkPosture(db: Db, cfg: Config): CheckResult[] {
  *                    whether you are ready, because startup refuses mainnet
  *                    until the very keys you are checking for are present.
  */
+/**
+ * Verifies the X posting credentials BY USING THEM -- with a GET, never a
+ * post. `GET /2/users/me` under the same OAuth 1.0a user-context signature
+ * that posting uses, so a revoked token, a read-only app permission, or a
+ * mistyped secret all surface here instead of silently eating the first
+ * launch announcement. Nothing is published.
+ */
+async function checkXAnnounce(cfg: Config): Promise<CheckResult> {
+  const name = "X announcements";
+  if (!cfg.social.xAnnounce.enabled) {
+    return OK(name, "disabled -- nothing to verify");
+  }
+  const keys = ["X_ANNOUNCE_API_KEY", "X_ANNOUNCE_API_SECRET",
+                "X_ANNOUNCE_ACCESS_TOKEN", "X_ANNOUNCE_ACCESS_TOKEN_SECRET"] as const;
+  const missing = keys.filter((k) => !process.env[k]);
+  if (missing.length) {
+    return FAIL(name, `enabled but ${missing.join(", ")} not set -- every announcement will be skipped`,
+      "https://developer.x.com/en/portal/dashboard (app must have Read AND Write)");
+  }
+  try {
+    const { buildAuthHeader } = await import("../social/announce.ts");
+    const url = "https://api.x.com/2/users/me";
+    const res = await httpFetch(url, {
+      headers: {
+        authorization: buildAuthHeader("GET", url, {
+          apiKey: process.env.X_ANNOUNCE_API_KEY!,
+          apiSecret: process.env.X_ANNOUNCE_API_SECRET!,
+          accessToken: process.env.X_ANNOUNCE_ACCESS_TOKEN!,
+          accessTokenSecret: process.env.X_ANNOUNCE_ACCESS_TOKEN_SECRET!,
+        }),
+      },
+      timeoutMs: 15_000, retries: 0, acceptStatuses: [401, 403],
+    });
+    if (res.status === 401 || res.status === 403) {
+      return FAIL(name, `credentials rejected (HTTP ${res.status}) -- revoked, mistyped, or the app lacks write permission`,
+        "regenerate tokens AFTER setting the app to Read and Write; tokens minted before the permission change stay read-only");
+    }
+    const body = await res.json() as { data?: { username?: string } };
+    return OK(name, `authenticated as @${body.data?.username ?? "?"} (GET only; nothing was posted)`);
+  } catch (e) {
+    return WARN(name, `could not reach api.x.com: ${String(e).slice(0, 100)}`);
+  }
+}
+
 export async function runPreflight(
   db: Db, cfg: Config, ctx: FeedContext, forMainnet = false,
 ): Promise<CheckResult[]> {
-  const [anthropic, pinata, gemini, rpc, wallet] = await Promise.all([
+  const [anthropic, pinata, gemini, rpc, wallet, xAnnounce] = await Promise.all([
     checkAnthropic(cfg, forMainnet),
     checkPinata(cfg, forMainnet),
     checkImageGenerator(cfg),
     checkRpc(cfg, forMainnet),
     checkWallet(cfg),
+    checkXAnnounce(cfg),
   ]);
   const posture = checkPosture(db, cfg);
   if (forMainnet && cfg.network !== "mainnet-beta") {
     posture.unshift(WARN("Target",
       `judging readiness for MAINNET while config says ${cfg.network}`));
   }
-  return [...posture, anthropic, pinata, gemini, ...rpc, ...wallet, ...checkFeeds(ctx)];
+  return [...posture, anthropic, pinata, gemini, ...rpc, ...wallet, xAnnounce, ...checkFeeds(ctx)];
 }
 
 export const SETUP_LINKS = `

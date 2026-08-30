@@ -139,3 +139,53 @@ describe("postLaunchAnnouncement — never affects the launch it announces", () 
     }
   });
 });
+
+describe("the thesis line", () => {
+  test("carries the source link when the candidate had one", () => {
+    const t = announcementText({ name: "Motor City", symbol: "MOTOR" },
+      "So1111111111111111111111111111111111111111",
+      "https://news.example.com/motor-city");
+    assert.ok(t.includes("thesis: https://news.example.com/motor-city"));
+    assert.ok(t.includes("pump.fun/coin/So1111111111111111111111111111111111111111"));
+  });
+
+  test("omits the thesis line cleanly when there is no source", () => {
+    const t = announcementText({ name: "Motor City", symbol: "MOTOR" }, "m1");
+    assert.ok(!t.includes("thesis"));
+    assert.ok(!t.includes("undefined"));
+  });
+
+  test("the disclosure marker is unconditional either way", () => {
+    // "auto-launched" is what keeps this on the right side of DECISIONS #2:
+    // the account says what it is on every single post.
+    for (const url of [undefined, "https://x.com/some/status/1"]) {
+      assert.ok(announcementText({ name: "N", symbol: "S" }, "m", url).includes("auto-launched"));
+    }
+  });
+});
+
+describe("postSessionUpdate", () => {
+  test("does nothing while disabled, and charges nothing", async () => {
+    const { postSessionUpdate } = await import("../src/social/announce.ts");
+    const db = openMemoryDb();
+    const budget = new BudgetGuard(db, cfg());
+    const posted = await postSessionUpdate(cfg(), budget,
+      { launches24h: 5, feesClaimedSol: 1, realizedPnlSol: 0.2, openPositions: 3 });
+    assert.equal(posted, false);
+    assert.equal(budget.meterUsed(METER_KEY), 0);
+  });
+
+  test("without credentials it declines before touching the meter", async () => {
+    const { postSessionUpdate } = await import("../src/social/announce.ts");
+    for (const k of ["X_ANNOUNCE_API_KEY", "X_ANNOUNCE_API_SECRET",
+                     "X_ANNOUNCE_ACCESS_TOKEN", "X_ANNOUNCE_ACCESS_TOKEN_SECRET"]) delete process.env[k];
+    const db = openMemoryDb();
+    const c = cfg({ social: { xAnnounce: { enabled: true } } });
+    const budget = new BudgetGuard(db, c);
+    const posted = await postSessionUpdate(c, budget,
+      { launches24h: 0, feesClaimedSol: 0, realizedPnlSol: 0, openPositions: 0 });
+    assert.equal(posted, false);
+    assert.equal(budget.meterUsed(METER_KEY), 0,
+      "a post that was never attempted must not be billed");
+  });
+});

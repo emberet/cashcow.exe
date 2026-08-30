@@ -86,8 +86,16 @@ export function buildAuthHeader(
  * disclose and because that disclosure is what keeps this on the
  * transparent side of docs/DECISIONS.md #2's line.
  */
-export function announcementText(identity: Pick<TokenIdentity, "name" | "symbol">, mint: string): string {
-  return `🐄 auto-launched $${identity.symbol} (${identity.name}) -- pump.fun/coin/${mint}`;
+export function announcementText(
+  identity: Pick<TokenIdentity, "name" | "symbol">, mint: string,
+  /** Already safeHttpUrl-validated by the caller (runner/loop.ts). */
+  thesisUrl?: string,
+): string {
+  const base = `🐄 auto-launched $${identity.symbol} (${identity.name}) -- pump.fun/coin/${mint}`;
+  // The thesis line is what makes the announcement more than a shill: it
+  // names the real-world thing the coin is about, same link the metadata
+  // carries (assets/ipfs.ts). Omitted when the candidate had no source.
+  return thesisUrl ? `${base}\n\nthesis: ${thesisUrl}` : base;
 }
 
 type Creds = { apiKey: string; apiSecret: string; accessToken: string; accessTokenSecret: string };
@@ -110,6 +118,7 @@ function readCreds(): Creds | undefined {
  */
 export async function postLaunchAnnouncement(
   identity: Pick<TokenIdentity, "name" | "symbol">, mint: string, cfg: Config, budget: BudgetGuard,
+  thesisUrl?: string,
 ): Promise<void> {
   if (!cfg.social.xAnnounce.enabled) return;
 
@@ -129,7 +138,7 @@ export async function postLaunchAnnouncement(
     return;
   }
 
-  const text = announcementText(identity, mint);
+  const text = announcementText(identity, mint, thesisUrl);
 
   try {
     await fetchJson(POST_URL, {
@@ -148,5 +157,54 @@ export async function postLaunchAnnouncement(
     // which charges an estimate before knowing the result. Retrying a failed
     // post is not worth a second charge for a best-effort feature.
     log.warn("x announce failed", { mint, ...errFields(e) });
+  }
+}
+
+/**
+ * A scheduled session summary -- launches today, fees claimed, realized P&L.
+ * Same account, same meter, same best-effort posture as launch announcements:
+ * a failure is logged and swallowed, and each post is charged against the
+ * shared x-announce-usd meter before it is attempted.
+ */
+export async function postSessionUpdate(
+  cfg: Config, budget: BudgetGuard,
+  stats: { launches24h: number; feesClaimedSol: number; realizedPnlSol: number; openPositions: number },
+): Promise<boolean> {
+  if (!cfg.social.xAnnounce.enabled) return false;
+  const creds = readCreds();
+  if (!creds) return false;
+
+  const { monthlyUsdCap, estimatedCostPerPost } = cfg.social.xAnnounce;
+  if (!budget.meterCharge(METER_KEY, estimatedCostPerPost, monthlyUsdCap)) {
+    log.warn("x session update skipped: monthly USD cap would be exceeded", {
+      used: budget.meterUsed(METER_KEY), cap: monthlyUsdCap,
+    });
+    return false;
+  }
+
+  const text =
+    `🐄 herd report\n\n` +
+    `coins launched (24h): ${stats.launches24h}\n` +
+    `fees milked: ${stats.feesClaimedSol.toFixed(3)} sol\n` +
+    `realized p&l: ${stats.realizedPnlSol >= 0 ? "+" : ""}${stats.realizedPnlSol.toFixed(3)} sol\n` +
+    `open positions: ${stats.openPositions}\n\n` +
+    `cashcowexe.win`;
+
+  try {
+    await fetchJson(POST_URL, {
+      method: "POST",
+      headers: {
+        authorization: buildAuthHeader("POST", POST_URL, creds),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ text }),
+      timeoutMs: 12_000,
+      retries: 0, // billable; a missed summary is harmless
+    });
+    log.info("x session update posted", { text });
+    return true;
+  } catch (e) {
+    log.warn("x session update failed", errFields(e));
+    return false;
   }
 }
