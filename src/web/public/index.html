@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex, nofollow">
 <title>cashcow.exe</title>
 <link rel="stylesheet" href="/styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐄</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><ellipse cx='30' cy='38' rx='22' ry='12' fill='%233f9142' transform='rotate(-14 30 38)'/><ellipse cx='74' cy='36' rx='22' ry='12' fill='%233f9142' transform='rotate(10 74 36)'/><ellipse cx='52' cy='52' rx='34' ry='32' fill='%23fffdf5'/><path d='M22 42 Q24 22 46 23 Q54 30 50 44 Q42 55 30 52 Q24 48 22 42 Z' fill='%233f9142'/><circle cx='38' cy='42' r='3' fill='%23fffdf5'/><circle cx='66' cy='45' r='2.4' fill='%231a1a1a'/><ellipse cx='52' cy='70' rx='22' ry='14' fill='%23ffd645'/><ellipse cx='44' cy='68' rx='3.4' ry='4.4' fill='%233f9142'/><ellipse cx='60' cy='68' rx='3.4' ry='4.4' fill='%233f9142'/></svg>">
 </head>
 <body>
 
@@ -74,25 +74,35 @@
       </div>
       <div class="hero-cow">
         <!-- Inline so the page has no external asset that can go missing. -->
-        <svg viewBox="0 0 280 210" role="img" aria-label="A cartoon cow, chewing">
-          <ellipse cx="140" cy="196" rx="86" ry="10" fill="#1a1a1a" opacity=".15"/>
-          <!-- legs first, so the body overlaps their tops cleanly -->
-          <rect x="58" y="128" width="21" height="56" rx="10" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6"/>
-          <rect x="96" y="128" width="21" height="56" rx="10" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6"/>
-          <rect x="150" y="128" width="21" height="56" rx="10" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6"/>
-          <path d="M40 96c-14 4-20 18-14 28" fill="none" stroke="#1a1a1a" stroke-width="6" stroke-linecap="round"/>
-          <ellipse cx="26" cy="128" rx="8" ry="10" fill="#1a1a1a"/>
-          <rect x="38" y="58" width="150" height="84" rx="40" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6"/>
-          <ellipse cx="80" cy="84" rx="20" ry="16" fill="#1a1a1a"/>
-          <ellipse cx="132" cy="112" rx="15" ry="12" fill="#1a1a1a"/>
-          <ellipse cx="205" cy="82" rx="50" ry="45" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6"/>
-          <path d="M166 50c-14-13-34-11-38 3 12 2 21 8 26 18z" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6" stroke-linejoin="round"/>
-          <path d="M244 50c14-13 34-11 38 3-12 2-21 8-26 18z" fill="#fffdf5" stroke="#1a1a1a" stroke-width="6" stroke-linejoin="round"/>
-          <ellipse cx="190" cy="72" rx="6" ry="8" fill="#1a1a1a"/>
-          <ellipse cx="224" cy="72" rx="6" ry="8" fill="#1a1a1a"/>
-          <ellipse cx="207" cy="104" rx="32" ry="21" fill="#ff9eb5" stroke="#1a1a1a" stroke-width="6"/>
-          <ellipse cx="197" cy="102" rx="4" ry="5" fill="#1a1a1a"/>
-          <ellipse cx="218" cy="102" rx="4" ry="5" fill="#1a1a1a"/>
+        <svg viewBox="0 0 280 210" width="280" height="210" role="img" aria-label="A green and white cow with yellow horns, peeking and chewing">
+          <!-- Redrawn 2026-08-30 to match the @cashcowEXE profile picture:
+               flat green/white with yellow horns and muzzle, peeking pose.
+               Flat on purpose (the pfp has no outlines); colors are the
+               site's own tokens so theme edits keep the pair in sync. -->
+          <ellipse cx="128" cy="200" rx="92" ry="9" fill="#1a1a1a" opacity=".12"/>
+          <!-- body hint, cropped at the left edge like the pfp -->
+          <path d="M-10 128 Q46 108 96 138 L96 210 L-10 210 Z" fill="#3f9142"/>
+          <ellipse cx="34" cy="168" rx="16" ry="12" fill="#fffdf5"/>
+          <ellipse cx="70" cy="192" rx="12" ry="9" fill="#fffdf5"/>
+          <!-- ears: big flat green lobes -->
+          <ellipse cx="46" cy="86" rx="38" ry="20" fill="#3f9142" transform="rotate(-16 46 86)"/>
+          <ellipse cx="206" cy="82" rx="40" ry="20" fill="#3f9142" transform="rotate(12 206 82)"/>
+          <!-- horns: yellow, stubby -->
+          <path d="M86 38 q-8 -26 16 -32 q0 16 8 27 z" fill="#ffd645"/>
+          <path d="M166 34 q4 -27 28 -25 q-6 15 -2 28 z" fill="#ffd645"/>
+          <!-- head -->
+          <ellipse cx="126" cy="106" rx="76" ry="70" fill="#fffdf5"/>
+          <!-- green patch over the left brow/eye, like the pfp -->
+          <path d="M54 84 Q60 42 108 44 Q126 60 118 88 Q104 112 74 108 Q56 102 54 84 Z" fill="#3f9142"/>
+          <!-- eyes: tiny dots; the one on the patch gets a white ring -->
+          <circle cx="92" cy="86" r="7" fill="#fffdf5"/>
+          <circle cx="92" cy="86" r="3" fill="#1a1a1a"/>
+          <circle cx="158" cy="92" r="3.6" fill="#1a1a1a"/>
+          <!-- muzzle: big yellow, green nostrils, small contented mouth -->
+          <ellipse cx="124" cy="146" rx="48" ry="30" fill="#ffd645"/>
+          <ellipse cx="106" cy="142" rx="7" ry="9" fill="#3f9142" transform="rotate(-12 106 142)"/>
+          <ellipse cx="142" cy="142" rx="7" ry="9" fill="#3f9142" transform="rotate(12 142 142)"/>
+          <path d="M112 162 q12 8 24 0" fill="none" stroke="#2c6b12" stroke-width="4" stroke-linecap="round"/>
         </svg>
       </div>
     </div>
@@ -177,18 +187,6 @@
     </div>
   </div>
 
-  <div class="card mb-l" id="project-token-card" hidden>
-    <div class="section-head" style="margin-bottom:10px">
-      <h4 class="cardtitle" style="margin-right:auto">The cow's own coin</h4>
-      <span class="label">not one of its picks</span>
-    </div>
-    <div id="project-token"></div>
-    <p class="note">
-      This one was launched by a human, not by the bot, so it is kept out of
-      every score, hit rate and average on this page.
-    </p>
-  </div>
-
   <div class="card mb-l" id="airdrop-card">
     <div class="section-head" style="margin-bottom:10px">
       <h4 class="cardtitle" style="margin-right:auto">Day 1 airdrop — paid</h4>
@@ -215,6 +213,18 @@
       <a href="/airdrop-day1.xlsx" download>Download the full sheet (.xlsx)</a>
       — every wallet, what it held, and what it got, in SOL and dollars, plus
       the wallets that were excluded and exactly why.
+    </p>
+  </div>
+
+  <div class="card mb-l" id="project-token-card" hidden>
+    <div class="section-head" style="margin-bottom:10px">
+      <h4 class="cardtitle" style="margin-right:auto">The cow's own coin</h4>
+      <span class="label">not one of its picks</span>
+    </div>
+    <div id="project-token"></div>
+    <p class="note">
+      This one was launched by a human, not by the bot, so it is kept out of
+      every score, hit rate and average on this page.
     </p>
   </div>
 
