@@ -37,6 +37,10 @@ export const FEED_FAMILY: Record<string, Family> = {
   reddit: "forum",
   hackernews: "forum",
   xApi: "social",
+  // Same platform and population as xApi -- a watchlist tweet corroborated
+  // by a search-API tweet is one crowd, not two. Deliberately NOT a new
+  // family, same reasoning as dexActivity above.
+  watchlist: "social",
   polymarket: "markets",
 };
 

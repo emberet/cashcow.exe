@@ -99,7 +99,7 @@ function recordFunnel(db: Db, cfg: Config, f: Funnel): void {
 export async function runLoop(
   db: Db, cfg: Config, budget: BudgetGuard, kill: KillSwitch,
 ): Promise<void> {
-  const ctx: FeedContext = { cfg, budget };
+  const ctx: FeedContext = { cfg, budget, db };
   let stopping = false;
 
   kill.installSignalHandlers(() => { stopping = true; });

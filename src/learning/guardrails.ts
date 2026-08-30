@@ -225,7 +225,13 @@ export function applyChanges(
   return { overlay, accepted, rejected };
 }
 
-const WEIGHT_KEYS = ["velocity", "corroboration", "cryptoAffinity", "tickerability", "reach"];
+// EVERY key in scoringSchema's weights object, kept in lockstep by
+// test/learning.test.ts. A key missing here is invisible to the
+// renormaliser, so the tuner would pin the listed keys to sum 1.0 while the
+// missing one rides on top -- exactly how `acceleration` briefly pushed the
+// effective sum to 1.15 (config 0.15 + a five-key overlay at 1.0) before
+// this comment existed.
+const WEIGHT_KEYS = ["velocity", "acceleration", "corroboration", "cryptoAffinity", "tickerability", "reach"];
 
 function renormaliseWeights(overlay: Record<string, unknown>, currentConfig: unknown): void {
   const merged: Record<string, number> = {};

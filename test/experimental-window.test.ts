@@ -45,7 +45,7 @@ function open(db: Db, over: Partial<ExperimentalWindowInput> = {}) {
 function mkCandidate(score: number, observations = 5): Candidate {
   return {
     key: "test-term", term: "test term", score,
-    components: { velocity: 0.5, corroboration: 0.5, cryptoAffinity: 0.5, tickerability: 0.5, reach: 0.5, decay: 1 },
+    components: { velocity: 0.5, acceleration: 0.5, corroboration: 0.5, cryptoAffinity: 0.5, tickerability: 0.5, reach: 0.5, decay: 1 },
     feeds: ["googleTrends"], families: ["search"], corroborationNote: "",
     firstSeen: Date.now(), lastSeen: Date.now(), observations,
   };

@@ -121,7 +121,12 @@ function assertCoherent(cfg: Config): void {
   }
 
   const w = cfg.scoring.weights;
-  const sum = w.velocity + w.corroboration + w.cryptoAffinity + w.tickerability + w.reach;
+  // Sum over EVERY key, not an enumerated list: a hardcoded list silently
+  // exempts any weight added later, which is how `acceleration` was briefly
+  // both invisible here and double-counted at scoring time (the tuner's
+  // renormaliser had the same enumerated-list bug -- guardrails.ts
+  // WEIGHT_KEYS). Object.values keeps both in lockstep with the schema.
+  const sum = Object.values(w).reduce((a, b) => a + b, 0);
   if (Math.abs(sum - 1) > 0.01) {
     problems.push(`scoring.weights must sum to 1.0 (currently ${sum.toFixed(3)}).`);
   }
