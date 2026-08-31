@@ -1704,3 +1704,48 @@ in §37 with the note "if this ever becomes max(), update DECISIONS #37" —
 did its job and was rewritten to pin the new contract, including a floor
 check that ceilings stay above the baselines a deployment actually
 configures.
+
+## 48. $LETS: the bot minted a stopword, and why nothing stopped it
+
+The bot launched **$LETS ("Let's")** on mainnet and announced it from the
+project's own X account. The source was `Let's build!` — a fragment of a
+promotional tweet from an anonymous account shilling an unrelated project's
+campaign. A human caught it; the post was deleted and the position sold
+(0.0489 SOL back, −0.0011).
+
+**Every gate had an opinion about the term except whether it meant
+anything.**
+
+- `tickerability` actively *rewarded* it: one word, ≤12 chars → 1.0, the
+  maximum. The component that judges "does this make a good ticker" cannot
+  tell a punchy noun from a fragment.
+- Corroboration was trivially satisfied — "let's" appears in every feed,
+  constantly, so it cleared `minCorroboratingFeeds` and two independent
+  families without effort.
+- The filters knew about trademarks, tragedy, slurs and people. None of them
+  had a concept of *contentlessness*.
+- And the score gate had been lowered from 75 to 36 an hour earlier to "boost
+  activity" — a deliberate, documented loosening that turned a latent hole
+  into a live one. The threshold is a symptom knob; lowering it does not
+  create junk candidates, it just stops hiding them.
+
+**The fix is a hard filter, not a score penalty.** `isMeaninglessTerm()`
+rejects a term when *every* token is a function word — pronouns,
+auxiliaries, prepositions, conversational filler. "Let's", "Now", "But",
+"Thank you", "Looking" all die; "Panthers", "Motor City", "the Panthers"
+(one stopword plus a content word) all live. A score penalty would have been
+tradeable against a low threshold, and "never launch these" is a standing
+instruction, not a preference.
+
+**Deliberately narrow.** Generic-but-real nouns — House, Earth, Water — are
+content words and are NOT killed here. They die at saturation when everyone
+has already minted them, which is the correct rail; §26's separation of
+"crowded" from other questions still holds, and merging them would make both
+worse.
+
+**What this says about the boost.** The 24h decline breakdown taken minutes
+before this launch showed 214 of 327 rejections were `crowded` and the
+surviving candidates were *Earth, Water, Thank, Now, Let, But* — visibly
+contentless words. That was the warning, in the data, before the launch
+happened. Lowering the threshold with that candidate pool was the wrong call
+even though the pool's problem was independently real.

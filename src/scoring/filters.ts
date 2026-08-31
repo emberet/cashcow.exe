@@ -11,7 +11,7 @@ import type { Config } from "../config/schema.ts";
  * *launch* costs rent, fees and potentially a lawyer.
  */
 
-export type FilterCategory = "trademark" | "tragedy" | "slur" | "operator";
+export type FilterCategory = "trademark" | "tragedy" | "slur" | "operator" | "meaningless";
 
 export type FilterResult =
   | { allowed: true }
@@ -134,6 +134,60 @@ const NOT_A_PERSON = new Set([
 ]);
 
 /**
+ * Function words with no standalone meaning. A term made ONLY of these is a
+ * sentence fragment the phrase extractor happened to catch, not a trend.
+ *
+ * This list exists because the bot minted $LETS from "Let's build!" -- a
+ * stopword scraped out of a promotional tweet shilling an unrelated project.
+ * Nothing upstream stopped it: `tickerability` actually REWARDS short single
+ * words (1 word + <=12 chars scores 1.0), corroboration was satisfied
+ * because "let's" appears everywhere, and no filter had an opinion about
+ * whether a term means anything at all. See DECISIONS #48.
+ */
+const FUNCTION_WORDS = new Set([
+  // pronouns / determiners
+  "i", "me", "my", "mine", "we", "us", "our", "ours", "you", "your", "yours",
+  "he", "him", "his", "she", "her", "hers", "it", "its", "they", "them",
+  "their", "theirs", "this", "that", "these", "those", "who", "whom", "whose",
+  "which", "what", "a", "an", "the", "some", "any", "each", "every", "all",
+  "both", "few", "more", "most", "other", "another", "such", "no", "nor",
+  // auxiliaries / modals / common verbs with no subject
+  "am", "is", "are", "was", "were", "be", "been", "being", "have", "has",
+  "had", "do", "does", "did", "will", "would", "shall", "should", "can",
+  "could", "may", "might", "must", "let", "lets", "get", "got", "go", "going",
+  "make", "made", "take", "took", "come", "came", "look", "looking", "see",
+  "saw", "know", "think", "want", "need", "say", "said", "tell", "told",
+  // prepositions / conjunctions / adverbs
+  "in", "on", "at", "to", "for", "of", "with", "by", "from", "up", "down",
+  "out", "off", "over", "under", "again", "further", "then", "once", "here",
+  "there", "when", "where", "why", "how", "and", "but", "or", "if", "because",
+  "as", "until", "while", "about", "into", "through", "during", "before",
+  "after", "above", "below", "between", "so", "than", "too", "very", "just",
+  "now", "also", "only", "even", "still", "yet", "ever", "never", "always",
+  // conversational filler that reads as a "trend" but says nothing
+  "yes", "yeah", "yep", "nope", "ok", "okay", "well", "oh", "ah", "hey",
+  "hi", "hello", "please", "thanks", "thank", "sorry", "wow", "lol",
+  "actually", "really", "maybe", "sure", "right", "great", "good", "nice",
+  "new", "old", "big", "little", "long", "much", "many", "one", "two",
+]);
+
+/**
+ * True when a term carries no content word at all -- every token is a
+ * function word. "Let's", "Now", "But", "Thank you", "Looking" are all this;
+ * "Panthers", "Motor City", "Dogecoin" are not.
+ *
+ * Deliberately narrow: it rejects only terms with NOTHING in them. Generic
+ * but real nouns ("House", "Earth", "Water") are content words and are left
+ * to the saturation gate, which is the correct rail for "everyone already
+ * minted this" -- see DECISIONS #26 on keeping those two questions separate.
+ */
+export function isMeaninglessTerm(text: string): boolean {
+  const toks = tokens(normalize(text), false).filter((t) => t.length > 0);
+  if (toks.length === 0) return true;
+  return toks.every((t) => FUNCTION_WORDS.has(t) || t.length < 2);
+}
+
+/**
  * Does this look like a real person's name?
  *
  * Two or three capitalised words, no digits, no obvious non-person vocabulary.
@@ -231,6 +285,18 @@ export function checkTerm(text: string, f: CompiledFilters): FilterResult {
     if (toks.has(term)) return reject(category, term, text);
   }
 
+  // A term with no content word is not a trend -- it is a fragment the
+  // extractor caught mid-sentence. Hard reject, not a score penalty: the
+  // score gate demonstrably lets these through (tickerability rewards short
+  // single words), and "never launch these" is the operator's standing
+  // instruction, not a preference to be traded off.
+  if (isMeaninglessTerm(text)) {
+    return {
+      allowed: false, category: "meaningless", matched: text,
+      reason: `"${text}" rejected: no content word -- a sentence fragment, not a trend`,
+    };
+  }
+
   // Checked on the ORIGINAL string: capitalisation is the whole signal, and
   // `norm` has already folded it away.
   if (f.blockLikelyPersonNames && looksLikePersonName(text)) {
@@ -261,6 +327,7 @@ function reject(category: FilterCategory, matched: string, text: string): Filter
     tragedy: "death, violence or disaster",
     slur: "slur",
     operator: "operator blocklist",
+    meaningless: "no content word -- a sentence fragment, not a trend",
   };
   return {
     allowed: false, category, matched,
