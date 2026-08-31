@@ -207,15 +207,36 @@ describe("experimentalWindow — the 24h boost that self-expires", () => {
 // nothing in the logs naming the cause. See DECISIONS #37.
 // ==================================================================
 
-describe("a window can override a static value downward", () => {
+describe("a window WIDENS and never narrows", () => {
   let db: Db;
   beforeEach(() => { db = openMemoryDb(); });
 
-  test("replace-not-max is the actual behaviour, and is pinned here", () => {
-    const c = cfg({ risk: { maxConcurrentPositions: 10 } });
-    open(db, { maxConcurrentPositions: 3 });
-    assert.equal(effectiveRisk(db, c).maxConcurrentPositions, 3,
-      "window replaces static -- if this ever becomes max(), update DECISIONS #37");
+  test("a window below the static value cannot throttle it", () => {
+    // This used to be replace-not-max, and it bit twice: a live window
+    // pinning 3 would have overridden a static 10 (DECISIONS #37), and
+    // ceilings of 15/1.2 would have throttled a static 69/5.5 the moment
+    // any window opened. Now max(static, min(window, ceiling)).
+    const c = cfg({ risk: { maxConcurrentPositions: 10, maxLaunchesPerDay: 69, maxSolPerDay: 5.5 } });
+    open(db, { maxConcurrentPositions: 3, maxLaunchesPerDay: 5, maxSolPerDay: 0.1 });
+    const r = effectiveRisk(db, c);
+    assert.equal(r.maxConcurrentPositions, 10, "static wins over a narrower window");
+    assert.equal(r.maxLaunchesPerDay, 69);
+    assert.equal(r.maxSolPerDay, 5.5);
+  });
+
+  test("a window above the static value still widens, up to the ceiling", () => {
+    const c = cfg({ risk: { maxLaunchesPerDay: 1, maxSolPerDay: 0.1 } });
+    open(db, { maxLaunchesPerDay: 10, maxSolPerDay: 0.85 });
+    const r = effectiveRisk(db, c);
+    assert.equal(r.maxLaunchesPerDay, 10, "widening still works");
+    assert.ok(Math.abs(r.maxSolPerDay - 0.85) < 1e-9);
+  });
+
+  test("the ceiling still bounds an absurd request", () => {
+    const c = cfg({ risk: { maxLaunchesPerDay: 1 } });
+    open(db, { maxLaunchesPerDay: 100_000 });
+    assert.equal(effectiveRisk(db, c).maxLaunchesPerDay,
+      EXPERIMENTAL_CEILINGS.maxLaunchesPerDay);
   });
 
   test("the static value returns intact once the window is cleared", () => {
@@ -225,11 +246,11 @@ describe("a window can override a static value downward", () => {
     assert.equal(effectiveRisk(db, c).maxConcurrentPositions, 10);
   });
 
-  test("the ceiling is not below what a deployment may statically configure", () => {
-    // A ceiling under the static baseline turns every window into a
-    // throttle. Keeping this >= 10 is what makes the 24h-hold config
-    // expressible inside a window at all.
-    assert.ok(EXPERIMENTAL_CEILINGS.maxConcurrentPositions >= 10,
-      "ceiling must be able to express the 24h-hold concurrency baseline");
+  test("ceilings are not below the baselines a deployment configures", () => {
+    // A ceiling under the static baseline is what made the mechanism inert
+    // three separate times. These floors keep windows meaningful.
+    assert.ok(EXPERIMENTAL_CEILINGS.maxConcurrentPositions >= 10);
+    assert.ok(EXPERIMENTAL_CEILINGS.maxLaunchesPerDay >= 69);
+    assert.ok(EXPERIMENTAL_CEILINGS.maxSolPerDay >= 5.5);
   });
 });
