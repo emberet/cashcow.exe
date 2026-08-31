@@ -1199,7 +1199,7 @@ Both keys are `risk.*`/`devPosition.*`, so this is a permanent config edit and
 not a `boost-window`: the window cannot reach `devPosition.*` at all, by
 design (see the Gotchas entry). Worth knowing that an active window *does*
 override `maxConcurrentPositions` while it runs — `effectiveRisk()` replaces
-rather than maxes — so a stale window pinning 3 would quietly cap the new 10.
+rather than maxes — so a stale window pinning 3 would quietly cap the new 10. (Superseded 2026-08-31 by §47: effectiveRisk() now widens only.)
 
 **Stated honestly: this softens the pattern, it does not erase it.** A creator
 that sells 100% of its bag 24 hours later is still a creator that sells
@@ -1675,3 +1675,32 @@ distribution.enabled precedent). Rails: the web process still never holds a
 key (applications are data; invariant 4), the throttle keys on the socket
 address (invariant 10, 5/day/IP), mint and wallet are base58-validated, and
 only real launches of this bot are accepted as targets.
+
+## 47. A window widens; it must never narrow
+
+`effectiveRisk()` replaced the static risk numbers with the window's, and
+that inversion bit three times:
+
+1. A live window pinning `maxConcurrentPositions: 3` overrode a new static
+   10 (§37) — caught before it stalled launches.
+2. Adding `acceleration` exposed the same enumerated-list class of bug in the
+   weight renormaliser (§44).
+3. Today: with the static baseline moved to 69 launches / 5.5 SOL by operator
+   directive, `EXPERIMENTAL_CEILINGS` of 15 / 1.2 meant that opening ANY
+   boost window would have **throttled the bot to a quarter of its
+   configured rate** — the exact opposite of what a tool named "boost" is
+   for, and invisible except as launches quietly not happening.
+
+Fixed structurally rather than by raising numbers again:
+`max(static, min(window, ceiling))`. A window can widen up to the ceiling and
+can never reduce below what the operator configured. Throttling was never
+this tool's job — `halt` stops launches, `--clear` cancels a window.
+
+The ceilings still moved (15→100 launches, 1.2→8 SOL) so windows stay
+*meaningful* above the new baseline, but the mechanism no longer depends on
+someone remembering to raise them: a ceiling below the baseline is now inert
+rather than harmful. The pinned test that asserted replace-not-max — written
+in §37 with the note "if this ever becomes max(), update DECISIONS #37" —
+did its job and was rewritten to pin the new contract, including a floor
+check that ceilings stay above the baselines a deployment actually
+configures.

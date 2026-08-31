@@ -33,8 +33,14 @@ if (!thresholdBound || !minObsBound) {
 }
 
 export const EXPERIMENTAL_CEILINGS = {
-  maxLaunchesPerDay: 15,
-  maxSolPerDay: 1.2,
+  // Raised 15 -> 100 and 1.2 -> 8 on 2026-08-31: the operator's static
+  // baseline moved to 69 launches / 5.5 SOL, and a ceiling below the
+  // baseline makes the whole mechanism inert (see the maxConcurrentPositions
+  // note below -- this is the third field to hit it). These bound a
+  // TEMPORARY human override; the money rails that matter are maxDailyLossSol
+  // below, minWalletBalanceSol, and the wallet itself.
+  maxLaunchesPerDay: 100,
+  maxSolPerDay: 8,
   // Raised 8 -> 10 on 2026-08-29, when devPosition.exit.maxHoldMinutes went to
   // 24h and static maxConcurrentPositions went to 10 to match (DECISIONS #37).
   // A ceiling BELOW the static baseline inverts this whole mechanism: because
@@ -224,12 +230,24 @@ export function effectiveRisk(db: Db, cfg: Config): RiskConfig {
   if (!w) return cfg.risk;
 
   const c = EXPERIMENTAL_CEILINGS;
+  // A window WIDENS; it must never narrow. Previously this replaced the
+  // static value outright, so a window whose numbers sat below config
+  // silently throttled the bot -- it bit once on maxConcurrentPositions
+  // (DECISIONS #37) and was about to bite again on maxLaunchesPerDay and
+  // maxSolPerDay once the static baseline moved to 69/5.5. max(static, ...)
+  // makes the inversion structurally impossible while the ceiling still
+  // bounds how far above static a window may reach. Throttling is not this
+  // tool's job: `halt` stops launches, `--clear` cancels a window.
+  const widen = (staticVal: number, windowVal: number, ceiling: number) =>
+    Math.max(staticVal, Math.min(windowVal, ceiling));
   return {
     ...cfg.risk,
-    maxLaunchesPerDay: Math.min(Math.round(w.risk.maxLaunchesPerDay), c.maxLaunchesPerDay),
-    maxSolPerDay: Math.min(w.risk.maxSolPerDay, c.maxSolPerDay),
-    maxDailyLossSol: Math.min(w.risk.maxDailyLossSol, c.maxDailyLossSol),
-    maxConcurrentPositions: Math.min(Math.round(w.risk.maxConcurrentPositions), c.maxConcurrentPositions),
+    maxLaunchesPerDay: widen(
+      cfg.risk.maxLaunchesPerDay, Math.round(w.risk.maxLaunchesPerDay), c.maxLaunchesPerDay),
+    maxSolPerDay: widen(cfg.risk.maxSolPerDay, w.risk.maxSolPerDay, c.maxSolPerDay),
+    maxDailyLossSol: widen(cfg.risk.maxDailyLossSol, w.risk.maxDailyLossSol, c.maxDailyLossSol),
+    maxConcurrentPositions: widen(
+      cfg.risk.maxConcurrentPositions, Math.round(w.risk.maxConcurrentPositions), c.maxConcurrentPositions),
   };
 }
 
