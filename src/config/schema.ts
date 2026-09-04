@@ -596,6 +596,36 @@ export const assetsSchema = z.object({
   }).default({}),
 });
 
+/**
+ * Lore: verifiable trivia attached to a launch AFTER it has already
+ * qualified. See src/lore/corpus.ts for why this is not a feed -- a static
+ * catalogue has no velocity, and giving it one would be DECISIONS #48 again.
+ *
+ * Deliberately absent from the tuner allowlist in learning/guardrails.ts:
+ * the allowlist is default-deny, so absence is already sufficient, and no
+ * entry should be added. Nothing here can influence what launches.
+ */
+export const loreSchema = z.object({
+  /** Ships off (invariant 7). Enabled per-deployment in config.json. */
+  enabled: z.boolean().default(false),
+  /** Written by scripts/fetch-lore-corpus.ts. Missing file = no lore, no error. */
+  corpusPath: z.string().default("data/lore/minor-planets.json"),
+  /**
+   * Minimum length for a single word INSIDE a longer term to be looked up.
+   * A whole-term match is allowed down to 3 characters. At 4, "Hal" still
+   * matches the trend "Hal" but not the word "hal" inside a sentence; drop
+   * this to 3 to be more permissive, at the cost of noisier matches.
+   */
+  minWordLength: z.number().int().min(3).max(12).default(4),
+  /**
+   * Let a lore URL stand in as the token's thesis link when the candidate
+   * carried no source URL of its own. Those launches currently ship with no
+   * per-token link at all, which is part of what a wallet reads as an
+   * unverified coin.
+   */
+  useAsThesisFallback: z.boolean().default(true),
+});
+
 export const feesSchema = z.object({
   /** pump.fun claims creator fees in bulk across all tokens, so this is one job. */
   claimIntervalMinutes: z.number().positive().default(720),
@@ -757,6 +787,7 @@ export const configSchema = z.object({
   filters: filtersSchema.default({}),
   assets: assetsSchema.default({}),
   fees: feesSchema.default({}),
+  lore: loreSchema.default({}),
   learning: z.object({
     /**
      * Off by default. A config that rewrites itself should be an explicit

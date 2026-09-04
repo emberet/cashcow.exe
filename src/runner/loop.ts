@@ -13,6 +13,7 @@ import { compileFilters, checkTerm, checkAll } from "../scoring/filters.ts";
 import { checkSaturation, findSelfDuplicate, DuplicateIdentityError } from "../scoring/saturation.ts";
 import { pumpFunMarket } from "../chain/market.ts";
 import { generateIdentity, RiskyTrendError } from "../assets/naming.ts";
+import { loreFor, appendLore } from "../lore/corpus.ts";
 import { renderTokenImage } from "../assets/image.ts";
 import { pinTokenMetadata } from "../assets/ipfs.ts";
 import { launchToken, estimateLaunchCostSol, type LaunchResult } from "../chain/launch.ts";
@@ -360,7 +361,7 @@ async function launchCandidate(
   filters: ReturnType<typeof compileFilters>,
   estimate: number,
 ): Promise<void> {
-  const identity = await generateIdentity(cfg, candidate, filters);
+  let identity = await generateIdentity(cfg, candidate, filters);
 
   // Re-check the generated identity: a clean trend can still yield a dirty name.
   const check = checkAll([identity.name, identity.symbol, identity.description], filters);
@@ -383,6 +384,24 @@ async function launchCandidate(
     );
   }
 
+  // Lore: a true, citable fact about the term, looked up ONLY now -- after
+  // every gate has already passed the candidate on its own merits. 34 of the
+  // first 35 launches were duds and the pattern in all of them was a coin
+  // with nothing to say ("Rust", "Cloud", "Thunder"); $LINUX shipped as a
+  // contentless noun while minor planet 9885 Linux existed the whole time.
+  //
+  // This can only change what a launch SAYS, never what qualifies as one. It
+  // reads no score and no gate reads it. See src/lore/corpus.ts for why a
+  // static catalogue must not become a feed.
+  const lore = loreFor(cfg, candidate.term, filters);
+  if (lore) {
+    identity = {
+      ...identity,
+      description: appendLore(identity.description, lore, cfg.assets.naming.maxTotalDescriptionLength),
+    };
+    log.info("lore attached to launch", { term: candidate.term, entry: lore.title });
+  }
+
   const image = await renderTokenImage(cfg, identity, candidate.term, budget);
   // Socials are published with the token. `pinTokenMetadata` has always
   // accepted these and was never given any, so every launch shipped with no
@@ -395,7 +414,12 @@ async function launchCandidate(
   // and pump.fun render whatever is here as a clickable link, so it goes
   // through safeHttpUrl() (invariant 11): feed URLs are whatever a stranger
   // typed.
-  const thesisUrl = safeHttpUrl(candidate.sampleUrl);
+  // A lore hit stands in when the candidate carried no source URL: those
+  // launches shipped with no per-token link at all, and an official
+  // catalogue entry is a better citation than nothing. The candidate's own
+  // source always wins when it has one.
+  const thesisUrl = safeHttpUrl(candidate.sampleUrl)
+    ?? (lore && cfg.lore.useAsThesisFallback ? safeHttpUrl(lore.url) : null);
   // Operator directive 2026-08-31: the twitter field carries the THESIS
   // TWEET when the trend came from X, and stays EMPTY otherwise -- never the
   // project account (that identity lives on the website). An X-sourced

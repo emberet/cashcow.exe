@@ -1749,3 +1749,82 @@ surviving candidates were *Earth, Water, Thank, Now, Let, But* — visibly
 contentless words. That was the warning, in the data, before the launch
 happened. Lowering the threshold with that candidate pool was the wrong call
 even though the pool's problem was independently real.
+
+## 49. Lore: giving a launch something true to say, without moving the bar
+
+Operator directive, 2026-09-04, prompted by a single observation: **asteroid
+18932 Robinhood**. A real minor planet whose name collides with a household
+brand. "Look for things like these."
+
+**What the data actually said.** 34 of the first 35 launches were duds, and
+the pattern in every one of them was the same: a term with nothing behind it
+— *Rust, Cloud, Thunder, War, Record, Security*. §48 established that the
+candidate pool's problem is quality and that the threshold is a symptom knob.
+But there is a second, separable problem underneath, and this is it: even a
+legitimately-trending term shipped as a coin with **no story and, when the
+feed carried no source URL, no link at all**. The bot launched **$LINUX**
+— score 59.0, peak mcap $3,376, dud — while minor planet **9885 Linux** had
+existed since 1994.
+
+**The corpus.** One unauthenticated call to NASA/JPL's Small-Body Database
+returns every named minor planet: 26,455 of them, of which 26,438 survive
+build-time filtering. 1,035 are ordinary English words in the modern (#5000+)
+numbering where pop-culture naming happens — *9000 Hal, 5405 Neverland, 8813
+Leviathan, 274020 Skywalker, 378214 Sauron, 6827 Wombat*. Built by
+`scripts/fetch-lore-corpus.ts`, run by hand: the IAU names a few hundred
+minor planets a year, so a stale corpus is missing names, never wrong about
+one.
+
+**This is NOT a feed, and the distinction is the whole design.** A static
+catalogue has no velocity and no acceleration. Wired in as a feed it would
+either never clear the threshold — correct, and useless — or it would need
+velocity manufactured for it, which is §48 wearing a different hat. So:
+
+> Lore changes what a launch **says**. It never changes what **qualifies**
+> as a launch.
+
+`loreFor()` is called in `launchCandidate()` *after* every gate has already
+passed the candidate. No scoring path imports it. It is absent from the
+tuner's `TUNABLE` allowlist and must stay absent — the allowlist is
+default-deny, so absence is already sufficient.
+
+**What it produces.** A `Lore:` sentence appended to the description (bounded
+by the same limit provenance respects — a truncated half-fact is worse than
+none), and, when the candidate carried no source URL of its own, the
+catalogue page as the token's thesis link. The candidate's own source always
+wins when it has one.
+
+**The bug this shipped with, and the test that caught it.** The first version
+screened the entry `title` — `"249541 Steinem"` — through `checkAll()`.
+`looksLikePersonName()` returns false for any string containing a digit, so
+**the catalogue number was itself the exemption**: every person-named entry
+in the catalogue sailed through the likeness screen untouched. This is bug
+family B (§44, §47) exactly — a check silently exempting a class of new
+member. The fix stores the bare `name` alongside the title and screens it
+separately; corpora written before the field existed have it recovered from
+the title rather than skipping the screen.
+
+**What is deliberately NOT solved.** A lone surname — *Steinem*, *Silver*,
+*Gold* — is indistinguishable from a common noun and no heuristic separates
+them. That is safe here *only because lore is not a gate*: the term "Gloria
+Steinem" is rejected by `checkTerm()` long before this code runs, so what
+lore can attach is bounded by what already qualified. If lore were ever
+allowed to influence scoring, this limitation would become a hole
+immediately.
+
+**No discovery dates.** JPL's `first_obs` is the start of the observation arc
+in the current orbit solution, not the discovery — it reports 1995 for Ceres,
+discovered in 1801. Publishing it would have put an unverified value straight
+onto a coin page: bug family A (§39–§43). Name, orbit class and diameter are
+directly stated by the source; the year is omitted rather than guessed.
+
+**Measured effect.** Against the real terms: 1 of 15 already-launched terms
+(Linux) and 2 of 15 live candidates would be enriched. A low single-digit
+hit rate is the honest expectation — this is not a volume lever, and it was
+never going to be one. It is the difference between a coin that says nothing
+and a coin that cites NASA.
+
+**Other catalogues of this shape**, verified reachable and free, not yet
+built: GBIF (species named after culture — `Agathidium vaderi`), UniProt
+(gene names — sonic hedgehog, SHH). USGS planetary nomenclature returns HTML
+only; same verdict as the soyjak sites in §45.
