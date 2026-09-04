@@ -31,3 +31,7 @@ data/*.bak*
 # `git add -A` away from being committed.
 data/*.backup-*
 data/*.backup
+# Lore corpus: 6MB rebuilt from NASA/JPL in one call by
+# scripts/fetch-lore-corpus.ts. Regenerable per host, and deploy.sh excludes
+# data/ anyway -- so it is fetched on each machine, never shipped through git.
+data/lore/

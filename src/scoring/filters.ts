@@ -144,7 +144,7 @@ const NOT_A_PERSON = new Set([
  * because "let's" appears everywhere, and no filter had an opinion about
  * whether a term means anything at all. See DECISIONS #48.
  */
-const FUNCTION_WORDS = new Set([
+export const FUNCTION_WORDS = new Set([
   // pronouns / determiners
   "i", "me", "my", "mine", "we", "us", "our", "ours", "you", "your", "yours",
   "he", "him", "his", "she", "her", "hers", "it", "its", "they", "them",

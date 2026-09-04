@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "source": "test fixture",
+  "fetchedAt": "2026-09-04T00:00:00.000Z",
+  "entries": [
+    {"source":"minorPlanet","key":"robinhood","title":"18932 Robinhood","name":"Robinhood","fact":"18932 Robinhood is a main-belt asteroid, about 3.8 km across.","url":"https://www.minorplanetcenter.net/db_search/show_object?object_id=18932","rank":18932},
+    {"source":"minorPlanet","key":"linux","title":"9885 Linux","name":"Linux","fact":"9885 Linux is a main-belt asteroid, about 5.0 km across.","url":"https://www.minorplanetcenter.net/db_search/show_object?object_id=9885","rank":9885},
+    {"source":"minorPlanet","key":"hal","title":"9000 Hal","name":"Hal","fact":"9000 Hal is a main-belt asteroid.","url":"https://www.minorplanetcenter.net/db_search/show_object?object_id=9000","rank":9000},
+    {"source":"minorPlanet","key":"james bond","title":"9007 James Bond","name":"James Bond","fact":"9007 James Bond is a main-belt asteroid.","url":"https://www.minorplanetcenter.net/db_search/show_object?object_id=9007","rank":9007},
+    {"source":"minorPlanet","key":"steinem","title":"249541 Steinem","name":"Steinem","fact":"249541 Steinem is a main-belt asteroid.","url":"https://www.minorplanetcenter.net/db_search/show_object?object_id=249541","rank":249541},
+    {"source":"minorPlanet","key":"windows","title":"99999 Windows","name":"Windows","fact":"99999 Windows is a fictional test entry naming a trademark.","url":"https://example.invalid/windows","rank":99999},
+    {"source":"minorPlanet","key":"apollo","title":"1862 Apollo","name":"Apollo","fact":"1862 Apollo is an Apollo near-Earth asteroid, about 1.5 km across.","url":"https://www.minorplanetcenter.net/db_search/show_object?object_id=1862","rank":1862},
+    {"source":"minorPlanet","key":"apollo","title":"400000 Apollo Dup","name":"Apollo Dup","fact":"400000 Apollo Dup is a main-belt asteroid.","url":"https://example.invalid/dup","rank":400000},
+    {"source":"minorPlanet","key":"legacy","title":"12345 Legacy","fact":"12345 Legacy is a main-belt asteroid.","url":"https://example.invalid/legacy","rank":12345}
+  ]
+}
