@@ -1839,11 +1839,29 @@ j7tracker.io as the reference point.
 state held the fast 5-minute one. That is backwards for a memecoin launcher:
 a CT post spawns coins directly, while a head-of-state post mostly produces
 person names the likeness rail rejects by design. CT is now the whole top of
-the priority tier — blknoiz06, theunipcs, frankdegods, MustStopMurad,
-notthreadguy, cobie, inversebrah — beside only the four megaphones whose
-posts actually move crypto markets (elonmusk, realDonaldTrump, sama,
-johnternus). The remaining eight world leaders and tech CEOs moved to the
-normal tier. Priority is **11 handles, one fewer than before**, so this costs
+the priority tier: blknoiz06, theunipcs, frankdegods, MustStopMurad,
+notthreadguy, cobie, inversebrah.
+
+**The test for keeping a non-CT priority slot** is not seniority or follower
+count — it is whether that account's posts have moved *crypto* markets
+specifically. Being powerful is not the qualifier; being market-moving in
+this asset class is. Four pass and keep 5-minute slots:
+
+- `elonmusk` — DOGE, repeatedly and measurably.
+- `realDonaldTrump` — has personally launched tokens; his posts move crypto
+  directly rather than by implication. This is a deliberate exception to
+  "heads of state go to the normal tier", and it is an exception to that
+  rule, not a hole in it: he is here on the crypto-market test that
+  `WhiteHouse` and the other seven fail, and he would lose the slot if he
+  stopped passing it.
+- `sama` — AI-cycle narratives drive whole memecoin waves.
+- `johnternus` — Apple's CEO; the $HELLO episode of 2026-09-02 is the worked
+  example of a single anodyne post from this seat spawning coins.
+
+Everyone else — WhiteHouse, kanyewest, narendramodi, nayibbukele, JMilei,
+ZelenskyyUa, sundarpichai, satyanadella — moved to the normal 15-minute
+tier. They are consequential accounts; they are not crypto-market movers,
+which is the only thing the priority tier is scarce for. Priority is **11 handles, one fewer than before**, so this costs
 slightly less X credit than the list it replaces.
 
 **Handle hygiene, verified live rather than assumed.**
