@@ -1828,3 +1828,85 @@ and a coin that cites NASA.
 built: GBIF (species named after culture — `Agathidium vaderi`), UniProt
 (gene names — sonic hedgehog, SHH). USGS planetary nomenclature returns HTML
 only; same verdict as the soyjak sites in §45.
+
+## 50. Crypto Twitter first, and the honest ceiling on "deploy fast"
+
+Operator directive, 2026-09-04: *"make the cow focus on crypto twitter more
+than anything, posts of high importance are to be deployed fast"*, alongside
+j7tracker.io as the reference point.
+
+**The tier rebalance.** CT was on the slow 15-minute tier while heads of
+state held the fast 5-minute one. That is backwards for a memecoin launcher:
+a CT post spawns coins directly, while a head-of-state post mostly produces
+person names the likeness rail rejects by design. CT is now the whole top of
+the priority tier: blknoiz06, theunipcs, frankdegods, MustStopMurad,
+notthreadguy, cobie, inversebrah.
+
+**The test for keeping a non-CT priority slot** is not seniority or follower
+count — it is whether that account's posts have moved *crypto* markets
+specifically. Being powerful is not the qualifier; being market-moving in
+this asset class is. Four pass and keep 5-minute slots:
+
+- `elonmusk` — DOGE, repeatedly and measurably.
+- `realDonaldTrump` — has personally launched tokens; his posts move crypto
+  directly rather than by implication. This is a deliberate exception to
+  "heads of state go to the normal tier", and it is an exception to that
+  rule, not a hole in it: he is here on the crypto-market test that
+  `WhiteHouse` and the other seven fail, and he would lose the slot if he
+  stopped passing it.
+- `sama` — AI-cycle narratives drive whole memecoin waves.
+- `johnternus` — Apple's CEO; the $HELLO episode of 2026-09-02 is the worked
+  example of a single anodyne post from this seat spawning coins.
+
+Everyone else — WhiteHouse, kanyewest, narendramodi, nayibbukele, JMilei,
+ZelenskyyUa, sundarpichai, satyanadella — moved to the normal 15-minute
+tier. They are consequential accounts; they are not crypto-market movers,
+which is the only thing the priority tier is scarce for. Priority is **11 handles, one fewer than before**, so this costs
+slightly less X credit than the list it replaces.
+
+**Handle hygiene, verified live rather than assumed.**
+- `tim_cook` → `johnternus`. Apple's CEO changed; the old handle was a dead
+  slot sitting in the highest-value tier.
+- `aeyakovenko` **removed — the account is a 404.** This has been carried as
+  "never resolved via the users API" in the known-unfixed list for weeks and
+  treated as a resolution bug. It was not a bug. Checking the profile in a
+  browser cost nothing and settled it; the API had been telling the truth all
+  along. Lesson worth keeping: when an API says an entity does not exist,
+  believe it before building theories about the client.
+- `0xMert_` was a candidate and is also a 404; not added.
+
+Watchlist output went from 0 to 6 signals on the first poll after the change.
+
+**Now the part that cannot be fixed by editing a list.** j7tracker advertises
+"sub-1ms server-side deploys, social-media tracking under 200ms". cashcow
+polls priority handles every **300,000 ms** and then requires
+`minObservations` 3, `minCorroboratingFeeds` 2 and `minIndependentFamilies`
+2. A tweet thirty seconds old is one observation, from one feed, in one
+family. **It cannot qualify, at any threshold.** This is not a tuning gap; it
+is what the corroboration rails ARE. cashcow is a corroborated-trend
+launcher, not a sniper, and no amount of faster polling changes that while
+those rails stand.
+
+So there are two honest paths, and the choice is the operator's:
+
+1. **Accept the identity.** The edge is not being first; it is launching
+   things that are genuinely trending across independent sources. 7.03 SOL in
+   fees says this works at small scale.
+2. **Build a real fast path**, which needs BOTH halves: push instead of poll
+   (X API filtered stream, an API-tier question), AND a launch route for
+   verified-megaphone posts that skips corroboration — because corroboration
+   is definitionally unsatisfiable for a fresh single post.
+
+Half (2) is a relaxation of the rail §45 refused, and §48 is what happens
+when a rail is relaxed for volume. It is not automatically the same mistake:
+scoped to a hand-verified handle allowlist, still passing the trademark,
+person and meaningless filters, still passing saturation and dedupe, still
+under BudgetGuard, and under its own separate daily cap, it is a far narrower
+relaxation than lowering a global threshold. But it IS a relaxation, it is
+the exact shape of change that produced $LETS, and it is not being built on
+my own judgment.
+
+**The blocker underneath both.** The X meter burned $99.98 in the first four
+days of September at the OLD tier layout. Streaming or faster polling costs
+more, and the real dashboard balance is still unknown after four requests.
+Speed cannot be bought until that number is known.
